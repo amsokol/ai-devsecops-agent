@@ -11,6 +11,7 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from agent import __version__
 from agent.backends.port import Backend, Budget
@@ -21,12 +22,14 @@ from agent.domain import Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
+from agent.issues import track_findings
 from agent.library import Library
 from agent.manifest import Manifest
 from agent.overlay import Overlay
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
-from agent.publish import Publication, publish_review
+from agent.publish import publish_review
+from agent.reconcile import caution_for
 from agent.remediate import Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
@@ -110,7 +113,7 @@ def run(
         notes_limit=config.notes_limit,
     )
 
-    if request.publish and request.change is None:
+    if request.publish and request.change is None and not request.trigger.is_maintenance:
         raise ConfigError(
             "--publish needs --change: there is no conversation to publish a review to without one"
         )
@@ -271,25 +274,20 @@ def run(
         fixes=tuple(fixes),
     )
 
-    if request.publish and request.change is not None:
+    if request.publish:
         # After the report, because the report is what gets published, and outside the event loop
         # because talking to the platform is a subprocess away rather than a coroutine.
-        published = _announce(
+        _announce(
             request,
+            manifest=manifest,
             platform=platform,
             repository=repository,
             verdict=verdict,
             report=report,
             outcomes=tuple(item.outcome for item in executed),
             change=session.change,
+            new_issues=overlay.limits.new_issues_per_run,
         )
-        manifest.actions = published.as_json()
-        if published.failure:
-            manifest.warnings.append(f"nothing was published: {published.failure}")
-        elif published.withheld:
-            manifest.warnings.append(f"nothing was published: {published.withheld}")
-        if published.caution:
-            manifest.warnings.append(published.caution)
 
     manifest.cache = cache.stats.as_json() | {"writable": cache.writable}
     manifest.finish(verdict.result.value)
@@ -369,34 +367,80 @@ async def _perform(
 def _announce(
     request: Request,
     *,
+    manifest: Manifest,
     platform: Platform | None,
     repository: Repository,
     verdict: Verdict,
     report: str,
     outcomes: tuple[TaskOutcome, ...],
     change: ChangeView | None,
-) -> Publication:
-    """Publish the decision, and treat every way that can fail as a warning rather than an end.
+    new_issues: int,
+) -> None:
+    """Write the decision where the trigger's audience is, and record who wrote it.
 
-    The platform is resolved here rather than at startup so that a missing client or an unreadable
-    remote costs a warning on a run that still produced a verdict. Refusing to start would be the
-    stricter choice and the wrong one: the analysis is the expensive part, and it is already done.
+    A review run has a conversation to write in; a maintenance run has none, so its findings are
+    tracked as issues instead. Both are the same reconciliation by finding key, and both ask the
+    platform once who the credential speaks for — a decision published under a person's name is a
+    machine's judgement wearing it.
+
+    Every way this can fail is a warning rather than an end. The platform is resolved here rather
+    than at startup so that a missing client or an unreadable remote costs a warning on a run that
+    still produced a verdict: the analysis is the expensive part, and it is already done.
     """
-    assert request.change is not None  # noqa: S101 - guaranteed by the check in `run`
     if platform is None:
         try:
             platform = GitHub.of(repository)
         except ScmError as error:
-            return Publication(failure=str(error))
-    return publish_review(
-        platform,
-        number=request.change,
-        verdict=verdict,
-        report=report,
-        head=repository.head,
-        outcomes=outcomes,
-        change=change,
-    )
+            manifest.actions = {"failure": str(error)}
+            manifest.warnings.append(f"nothing was published: {error}")
+            return
+    try:
+        identity = platform.identity()
+    except ScmError as error:
+        manifest.actions = {"failure": str(error)}
+        manifest.warnings.append(f"nothing was published: {error}")
+        return
+    actions: dict[str, Any] = {"identity": identity.as_json()}
+    caution = caution_for(identity)
+
+    if request.trigger.is_maintenance:
+        tracked = track_findings(
+            platform,
+            verdict=verdict,
+            outcomes=outcomes,
+            head=repository.head,
+            limit=new_issues,
+        )
+        actions["issues"] = tracked.as_json()
+        if tracked.failure:
+            manifest.warnings.append(f"the tracked issues are incomplete: {tracked.failure}")
+    else:
+        assert request.change is not None  # noqa: S101 - guaranteed by the check in `run`
+        published = publish_review(
+            platform,
+            number=request.change,
+            verdict=verdict,
+            report=report,
+            head=repository.head,
+            outcomes=outcomes,
+            change=change,
+            identity=identity,
+        )
+        actions["review"] = published.as_json()
+        if published.identity is not None:
+            # The review's own author outranks what the credential said about itself, so the caution
+            # is recomputed from the name the platform actually recorded.
+            actions["identity"] = published.identity.as_json()
+            caution = published.caution
+        if published.failure:
+            manifest.warnings.append(f"nothing was published: {published.failure}")
+        elif published.withheld:
+            manifest.warnings.append(f"nothing was published: {published.withheld}")
+
+    actions["caution"] = caution
+    manifest.actions = actions
+    if caution:
+        manifest.warnings.append(caution)
 
 
 def _conclude(

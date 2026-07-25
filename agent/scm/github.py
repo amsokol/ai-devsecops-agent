@@ -19,17 +19,29 @@ import re
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Self
 
 from agent.errors import ConfigError
 from agent.repo import Repository
 from agent.scm import marker
-from agent.scm.port import Change, Identity, NewThread, Review, ScmError, Stance, Thread
+from agent.scm.port import (
+    Change,
+    Identity,
+    Issue,
+    NewIssue,
+    NewThread,
+    Review,
+    ScmError,
+    Stance,
+    Thread,
+)
 
 CLIENT = "gh"
 TIMEOUT_SECONDS = 60
 THREAD_PAGE = 50
+PAGE = 100
+MAX_PAGES = 20
 
 TOKEN_VARIABLES = ("AGENT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
 """Where the credential is read from, in order. `AGENT_GITHUB_TOKEN` comes first so a machine that
@@ -112,6 +124,8 @@ class GitHub:
     owner: str
     repository: str
     credential: Credential
+    _labelled: set[str] = field(default_factory=set, compare=False, repr=False)
+    """Labels this instance has already made sure of, so one run asks once."""
 
     @property
     def name(self) -> str:
@@ -292,6 +306,86 @@ class GitHub:
     def unresolve(self, thread: Thread) -> None:
         self._graphql(_UNRESOLVE, {"id": thread.id})
 
+    def issues(self, *, label: str) -> tuple[Issue, ...]:
+        """Open issues that carry both the label and a marker.
+
+        Pull requests are dropped: this endpoint answers with both, and a change request treated
+        as a tracked finding would be edited and closed as one. The marker is what proves
+        authorship — anyone can apply a label, and the agent must not close a human's issue.
+        """
+        found: list[Issue] = []
+        for item in self._paged(f"repos/{self.slug}/issues", query=f"state=open&labels={label}"):
+            if "pull_request" in item:
+                continue
+            body = str(item.get("body") or "")
+            key = marker.read(body)
+            if not key:
+                continue
+            found.append(
+                Issue(
+                    number=int(item.get("number", 0)),
+                    key=key,
+                    title=str(item.get("title") or ""),
+                    body=body,
+                    reference=str(item.get("html_url") or ""),
+                )
+            )
+        return tuple(found)
+
+    def raise_issue(self, new: NewIssue, *, label: str) -> Issue:
+        self._ensure_label(label)
+        got = self._api(
+            f"repos/{self.slug}/issues",
+            method="POST",
+            body={"title": new.title, "body": new.body, "labels": [label]},
+        )
+        return Issue(
+            number=int(got.get("number", 0)),
+            key=new.key,
+            title=new.title,
+            body=new.body,
+            reference=str(got.get("html_url") or ""),
+        )
+
+    def edit_issue(self, issue: Issue, body: str) -> None:
+        self._api(f"repos/{self.slug}/issues/{issue.number}", method="PATCH", body={"body": body})
+
+    def note(self, issue: Issue, body: str) -> None:
+        self._api(
+            f"repos/{self.slug}/issues/{issue.number}/comments", method="POST", body={"body": body}
+        )
+
+    def close_issue(self, issue: Issue) -> None:
+        self._api(
+            f"repos/{self.slug}/issues/{issue.number}",
+            method="PATCH",
+            body={"state": "closed", "state_reason": "completed"},
+        )
+
+    def _ensure_label(self, label: str) -> None:
+        """Create the label once per run, and treat "it already exists" as success.
+
+        Asked for rather than assumed, because a label the repository does not have is dropped
+        silently when an issue is created — and the whole reconciliation then reads an empty list
+        next week and opens every issue again.
+        """
+        if label in self._labelled:
+            return
+        self._labelled.add(label)
+        try:
+            self._api(
+                f"repos/{self.slug}/labels",
+                method="POST",
+                body={
+                    "name": label,
+                    "color": "ededed",
+                    "description": "Raised by the DevSecOps agent",
+                },
+            )
+        except ScmError as error:
+            if "already_exists" not in str(error).lower():
+                raise
+
     def _graphql(
         self, query: str, variables: dict[str, Any], *, cursor: str | None = None
     ) -> dict[str, Any]:
@@ -340,6 +434,25 @@ class GitHub:
         except json.JSONDecodeError:
             raise ScmError(f"{CLIENT} api {arguments[0]} did not answer with JSON") from None
         return got if isinstance(got, dict) else {"data": got}
+
+    def _paged(self, path: str, *, query: str) -> list[dict[str, Any]]:
+        """Every page of a listing, because the first page is not the answer.
+
+        A repository with more open findings than one page holds would otherwise look, to the
+        reconciliation, like one where the rest were fixed: they are absent from the list, so they
+        get raised again as duplicates. The page cap guards against a listing that never shortens
+        rather than limiting anything anyone should reach.
+        """
+        items: list[dict[str, Any]] = []
+        for page in range(1, MAX_PAGES + 1):
+            got = self._api(f"{path}?{query}&per_page={PAGE}&page={page}")
+            block = got.get("data")
+            if not isinstance(block, list) or not block:
+                return items
+            items += [item for item in block if isinstance(item, dict)]
+            if len(block) < PAGE:
+                return items
+        return items
 
     def _environment(self) -> dict[str, str]:
         """The client's environment, with the identity question already settled.

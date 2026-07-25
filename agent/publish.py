@@ -22,9 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from agent.domain import Outcome
 from agent.errors import ConfigError
 from agent.findings import Action
+from agent.reconcile import Posted, caution_for, unproven
 from agent.repo import ChangeView
 from agent.scm import marker
 from agent.scm.port import Identity, NewThread, Platform, ScmError, Stance
@@ -39,18 +39,6 @@ RETURNED_NOTE = (
     "This is present again on the current head, so this thread is open once more. The first "
     "comment has the current detail."
 )
-
-
-@dataclass(frozen=True, slots=True)
-class Posted:
-    """One thing that happened on the platform, or was deliberately not attempted."""
-
-    what: str
-    key: str = ""
-    detail: str = ""
-
-    def as_json(self) -> dict[str, Any]:
-        return {"what": self.what, "key": self.key, "detail": self.detail}
 
 
 @dataclass(slots=True)
@@ -90,6 +78,7 @@ def publish_review(
     head: str,
     outcomes: tuple[TaskOutcome, ...],
     change: ChangeView | None,
+    identity: Identity,
 ) -> Publication:
     """Post one review, reconcile the threads, and record every step.
 
@@ -97,7 +86,7 @@ def publish_review(
     the exit code already carries it; losing that because a comment could not be posted would make
     the gate less reliable than the platform it talks to.
     """
-    record = Publication()
+    record = Publication(identity=identity, caution=caution_for(identity))
     try:
         return _publish(platform, record, number, verdict, report, head, outcomes, change)
     except ScmError as error:
@@ -115,8 +104,6 @@ def _publish(
     outcomes: tuple[TaskOutcome, ...],
     change: ChangeView | None,
 ) -> Publication:
-    record.identity = platform.identity()
-    record.caution = caution_for(record.identity)
     proposed = platform.change(number)
     if proposed.draft:
         record.withheld = "the change is a draft, so the run reports without publishing"
@@ -161,7 +148,7 @@ def _publish(
     for key, thread in sorted(existing.items()):
         if key in current or thread.resolved:
             continue
-        reason = _resolvable(key, outcomes)
+        reason = unproven(key, outcomes)
         if reason is not None:
             record.posted.append(Posted("kept-open", key, reason))
             continue
@@ -190,30 +177,6 @@ def _publish(
         record.identity = replace(record.identity, login=review.author)
         record.caution = caution_for(record.identity)
     return record
-
-
-def caution_for(identity: Identity) -> str:
-    """Whether these comments will read — and behave — as a person's.
-
-    Not a refusal, because a dedicated machine account is a legitimate way to run this and the
-    platform shows it as an ordinary user. It is said out loud, once, because the consequence is not
-    cosmetic: a workflow that starts a run on human comments and filters bots cannot filter an
-    ordinary user, so the agent's own comment wakes the agent, which comments again.
-    """
-    if identity.trustworthy:
-        return ""
-    if not identity.known:
-        return (
-            "the credential's account could not be read, so it is not known whether these comments "
-            "will be shown as a machine's. If the workflow wakes on comments, filter by the login "
-            "that posts them"
-        )
-    return (
-        f"published as {identity.login}, which the platform shows as a person rather than a bot. A "
-        "machine's judgement under a human name is hard to tell from a colleague's opinion, and a "
-        f"workflow that filters bot comments will not filter {identity.login}: filter that login "
-        "explicitly, or publish with a bot credential"
-    )
 
 
 def _thread_body(judged: Judged) -> str:
@@ -260,21 +223,4 @@ def _attachable(judged: Judged, change: ChangeView | None) -> tuple[str, int] | 
         return None
     if any(line.line == location.line for line in touched.added):
         return touched.path, location.line
-    return None
-
-
-def _resolvable(key: str, outcomes: tuple[TaskOutcome, ...]) -> str | None:
-    """Why a thread whose finding is gone must stay open, or `None` when it may be resolved.
-
-    The owning capability is read from the head of the key, which is where it is by construction.
-    Requiring that capability's own task to have finished `clean` is the whole rule: a task that was
-    exhausted, or that never ran because the run was narrowed, says nothing about the finding.
-    """
-    capability = key.split(":", 1)[0]
-    owning = [item for item in outcomes if item.capability == capability]
-    if not owning:
-        return f"{capability} did not run in this run, so its absence proves nothing"
-    if any(item.outcome is not Outcome.CLEAN for item in owning):
-        states = ", ".join(sorted({item.outcome.value for item in owning}))
-        return f"{capability} finished {states} rather than clean"
     return None

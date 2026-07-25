@@ -11,6 +11,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from agent import __version__
 from agent.domain import Trigger
@@ -62,6 +63,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "analyse and say which findings would be fixed, without touching the repository: no "
             "worktree, no branch, no commit"
+        ),
+    )
+    maintain.add_argument(
+        "--publish",
+        action="store_true",
+        help=(
+            "track findings as issues: one per finding, brought up to date rather than duplicated, "
+            "and closed with evidence when the check that owns it ran clean and found nothing"
         ),
     )
 
@@ -168,7 +177,7 @@ def _request(arguments: argparse.Namespace) -> Request:
     )
 
 
-def _print_actions(actions: dict[str, object]) -> None:
+def _print_actions(actions: dict[str, Any]) -> None:
     """What the run did on the platform, including the threads it deliberately left as they were.
 
     "Unchanged" is worth a line: the whole promise of publishing by finding key is that a rerun does
@@ -176,15 +185,21 @@ def _print_actions(actions: dict[str, object]) -> None:
     """
     if not actions:
         return
-    posted = actions.get("posted")
-    if isinstance(posted, list):
-        for item in posted:
+    identity = actions.get("identity")
+    who = Identity(**identity).description if isinstance(identity, dict) else "an unknown account"
+    for part in ("review", "issues"):
+        block = actions.get(part)
+        if not isinstance(block, dict):
+            continue
+        for item in block.get("posted") or []:
             detail = f"  {item['detail']}" if item.get("detail") else ""
             print(f"  {item['what']:<10} {item['key']}{detail}")
-    if actions.get("published"):
-        identity = actions.get("identity")
-        who = Identity(**identity).description if isinstance(identity, dict) else "?"
-        print(f"published {actions.get('stance')} as {who}  {actions.get('reference')}")
+    review = actions.get("review")
+    if isinstance(review, dict) and review.get("published"):
+        print(f"published {review.get('stance')} as {who}  {review.get('reference')}")
+    tracked = actions.get("issues")
+    if isinstance(tracked, dict):
+        print(f"issues    {tracked['raised']} raised, {tracked['closed']} closed, as {who}")
 
 
 def _print_summary(record: RunRecord) -> None:

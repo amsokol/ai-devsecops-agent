@@ -149,6 +149,30 @@ class NewThread:
     line: int
 
 
+@dataclass(frozen=True, slots=True)
+class Issue:
+    """One of the agent's own tracked findings, as the platform has it now."""
+
+    number: int
+    key: str
+    """Read from the marker in the body, not from the title: a title is prose and gets edited."""
+    title: str
+    body: str
+    reference: str = ""
+
+    def as_json(self) -> dict[str, Any]:
+        return {"number": self.number, "key": self.key, "reference": self.reference}
+
+
+@dataclass(frozen=True, slots=True)
+class NewIssue:
+    """A finding to start tracking."""
+
+    key: str
+    title: str
+    body: str
+
+
 class Platform(Protocol):
     """A hosting platform, as far as publishing a review is concerned."""
 
@@ -182,3 +206,18 @@ class Platform(Protocol):
 
     def unresolve(self, thread: Thread) -> None:
         """Bring a thread back: a problem that returned to a resolved thread is one nobody sees."""
+
+    def issues(self, *, label: str) -> tuple[Issue, ...]:
+        """The agent's own open issues, carrying a marker. Somebody else's issue is not the agent's
+        to edit or close, and the label alone is not proof of authorship."""
+
+    def raise_issue(self, new: NewIssue, *, label: str) -> Issue:
+        """Start tracking a finding, labelled so a team can find, mute or query the whole set."""
+
+    def edit_issue(self, issue: Issue, body: str) -> None:
+        """Bring an existing issue up to date, rather than opening a second one for one problem."""
+
+    def note(self, issue: Issue, body: str) -> None:
+        """Say something on the issue. Every closure says why before it happens."""
+
+    def close_issue(self, issue: Issue) -> None: ...

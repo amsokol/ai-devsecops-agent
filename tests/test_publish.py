@@ -65,6 +65,7 @@ def publish(
         head=head,
         outcomes=outcomes,
         change=change,
+        identity=platform.identity(),
     )
 
 
@@ -278,9 +279,19 @@ def test_a_platform_that_refuses_to_publish_does_not_cost_the_run_its_verdict(
     platform: FakePlatform,
 ) -> None:
     """The analysis is the expensive part and it is already done. A failed comment is a warning."""
+    identity = platform.identity()
     platform.fail = "the token cannot see this repository"
 
-    record = publish(platform, verdict_of(judged(finding())))
+    record = publish_review(
+        platform,
+        number=7,
+        verdict=verdict_of(judged(finding())),
+        report="## No blocking findings\n",
+        head=HEAD,
+        outcomes=(CLEAN,),
+        change=None,
+        identity=identity,
+    )
 
     assert not record.published
     assert "token cannot see" in record.failure

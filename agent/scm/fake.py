@@ -12,7 +12,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from agent.scm import marker
-from agent.scm.port import Change, Identity, NewThread, Review, ScmError, Stance, Thread
+from agent.scm.port import (
+    Change,
+    Identity,
+    Issue,
+    NewIssue,
+    NewThread,
+    Review,
+    ScmError,
+    Stance,
+    Thread,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +54,10 @@ class FakePlatform:
     replies: list[tuple[str, str]] = field(default_factory=list)
     calls: list[Call] = field(default_factory=list)
     reviews: list[tuple[Stance, str]] = field(default_factory=list)
+    tracked: list[Issue] = field(default_factory=list)
+    closed: list[Issue] = field(default_factory=list)
+    notes: list[tuple[str, str]] = field(default_factory=list)
+    labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -109,6 +123,46 @@ class FakePlatform:
         self._check()
         self._change(thread, resolved=False)
         self.calls.append(Call("unresolve", key=thread.key))
+
+    def issues(self, *, label: str) -> tuple[Issue, ...]:
+        self._check()
+        return tuple(
+            item for item in self.tracked if label in self.labels.get(item.number, ()) and item.key
+        )
+
+    def raise_issue(self, new: NewIssue, *, label: str) -> Issue:
+        self._check()
+        number = len(self.tracked) + len(self.closed) + 1
+        issue = Issue(
+            number=number,
+            key=new.key,
+            title=new.title,
+            body=new.body,
+            reference=f"fake://issue/{number}",
+        )
+        self.tracked.append(issue)
+        self.labels[number] = (label,)
+        self.calls.append(Call("raise_issue", key=new.key, detail=new.title))
+        return issue
+
+    def edit_issue(self, issue: Issue, body: str) -> None:
+        self._check()
+        self.tracked = [
+            replace(item, body=body) if item.number == issue.number else item
+            for item in self.tracked
+        ]
+        self.calls.append(Call("edit_issue", key=issue.key))
+
+    def note(self, issue: Issue, body: str) -> None:
+        self._check()
+        self.notes.append((issue.key, body))
+        self.calls.append(Call("note", key=issue.key, detail=body))
+
+    def close_issue(self, issue: Issue) -> None:
+        self._check()
+        self.tracked = [item for item in self.tracked if item.number != issue.number]
+        self.closed.append(issue)
+        self.calls.append(Call("close_issue", key=issue.key))
 
     def _find(self, thread: Thread) -> Thread:
         return next(item for item in self.opened if item.id == thread.id)

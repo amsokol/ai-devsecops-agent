@@ -23,7 +23,8 @@ from pathlib import Path
 from agent.domain import Outcome, RunResult
 from agent.evidence import Reliability, Subject
 from agent.findings import Action, Finding, Klass, Location, Severity
-from agent.publish import Publication, caution_for, publish_review
+from agent.publish import Publication, publish_review
+from agent.reconcile import caution_for
 from agent.repo import ChangeView, Repository
 from agent.scm import GitHub, ScmError
 from agent.verdict import Judged, TaskOutcome, Verdict
@@ -102,6 +103,7 @@ def main() -> int:
             head=repository.head,
             outcomes=(outcome,),
             change=change,
+            identity=identity,
         )
         print(f"\n== {label}")
         print(f"   published {record.published} stance {record.stance} {record.reference}")

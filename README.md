@@ -238,15 +238,40 @@ failure is a warning rather than an end. The analysis is the expensive part and 
 exit code still carries the decision, and `manifest.actions` records every thread the run touched,
 including the ones it deliberately left alone.
 
+## Tracking findings as issues
+
+A maintenance run has no conversation to write in — there is no diff anyone is reading — so
+`maintain --publish` tracks its findings as issues instead. It needs *Issues: write*, and it is the
+same reconciliation by finding key that a review's threads get:
+
+| On a rerun | What happens |
+| --- | --- |
+| the finding is still there, unchanged | nothing at all — no comment, no edit |
+| the finding is still there, reworded | its existing issue is brought up to date |
+| the finding is gone and its capability finished `clean` | the issue is closed, with a comment naming what looked and where |
+| the finding is gone but its capability failed | the issue is left exactly as it was, silently |
+| the issue has no marker | it belongs to a human, label or not |
+
+The last two rows are the ones that matter in practice. "Still present" on an issue whose check failed
+would be as unfounded as closing it, and a weekly reminder that nothing is known is what teaches a team
+to mute the agent. And a label proves nothing about authorship: anyone can apply `agent`, so the marker
+is what the reconciliation trusts.
+
+Titles are built from the parts that identify a problem and none that drift — no version, no advisory
+identifier — so a saved search keeps matching while the body is updated in place. New issues per run
+are limited by the overlay (`maintenance.new_issues_per_run`); findings over the limit are left for the
+next run and named in the record, never dropped and never merged into somebody else's issue.
+
 ## Status
 
 Stage 6, second slice: a review run publishes its decision on GitHub and reconciles its threads by
-finding key. Before it, a maintenance run prepares verified fix branches locally, on top of the
-decision path, the tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets;
-every analyst capability the library defines can run, and a run can be narrowed with `--only` (for
-example `deps-vuln@python-uv`). What is still ahead: issues and fix pull requests for maintenance
-runs, the restraints a scheduled run needs, and the eval harness. `backend: fake` remains available
-for CI that must exercise the pipeline without a model.
+finding key, and a maintenance run tracks its findings as issues by the same key. Before them, a
+maintenance run prepares verified fix branches locally, on top of the decision path, the tool
+registry, the Cursor SDK adapter, role bindings, concurrency and budgets; every analyst capability the
+library defines can run, and a run can be narrowed with `--only` (for example `deps-vuln@python-uv`).
+What is still ahead: pushing those fix branches and opening the change requests that carry them, the
+restraints a scheduled run needs, and the eval harness. `backend: fake` remains available for CI that
+must exercise the pipeline without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.

@@ -166,10 +166,44 @@ def test_a_published_review_records_every_thread_it_touched(
 
     record = run(request, platform=platform)
 
-    assert record.manifest.actions["published"] is True
-    assert record.manifest.actions["stance"] == "approve"
+    assert record.manifest.actions["review"]["published"] is True
+    assert record.manifest.actions["review"]["stance"] == "approve"
+    assert record.manifest.actions["identity"]["login"] == "devsecops-agent[bot]"
     assert platform.reviews[0][1] == record.report
     assert not any("published" in warning for warning in record.manifest.warnings)
+
+
+def test_a_maintenance_run_that_publishes_writes_issues_and_no_review(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """A maintenance run has no conversation to write in, so `--publish` means the tracker.
+
+    Nothing is found on this branch, so nothing is raised — and that silence is the point: a weekly
+    "all clear" is what teaches a team to skip whatever the agent writes.
+    """
+    platform = FakePlatform()
+    request = Request(
+        trigger=Trigger.MAINTAIN_SCHEDULED,
+        repository=git_repo,
+        library_path=library_root,
+        overlay_path=overlay_root,
+        run_dir=tmp_path / "runs",
+        config_dir=config_dir,
+        publish=True,
+    )
+
+    record = run(request, platform=platform)
+
+    assert record.exit_code == int(ExitCode.OK)
+    assert record.manifest.actions["issues"] == {
+        "posted": [],
+        "raised": 0,
+        "closed": 0,
+        "failure": "",
+    }
+    assert "review" not in record.manifest.actions
+    assert not platform.reviews
+    assert not platform.tracked
 
 
 def test_a_checkout_with_nowhere_to_publish_still_keeps_its_verdict(
