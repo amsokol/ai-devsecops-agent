@@ -167,10 +167,29 @@ rather than a bot, `manifest.warnings` says so and names the filter the workflow
 machine account is a legitimate setup, so this is a caution rather than a refusal.
 
 For a repository of one's own, the workflow token is enough and needs no secret. For an agent that
-several repositories share, a GitHub App is the better identity: comments arrive from
-`<app>[bot]`, permissions are granted per installation rather than per person, and nobody's departure
-takes the reviewer with it. Mint an installation token in the workflow and put it in
-`AGENT_GITHUB_TOKEN`; nothing in the agent changes.
+several repositories share, a GitHub App is the better identity: comments arrive from `<app>[bot]`,
+permissions are granted per installation rather than per person, and nobody's departure takes the
+reviewer with it. Nothing in the agent changes — the installation token goes in
+`AGENT_GITHUB_TOKEN`:
+
+```yaml
+- uses: actions/create-github-app-token@v2
+  id: agent
+  with:
+    app-id: ${{ vars.AGENT_APP_ID }}
+    private-key: ${{ secrets.AGENT_APP_KEY }}
+- run: uv run agent review --change ${{ github.event.pull_request.number }} --base ${{ github.base_ref }} --publish
+  env:
+    AGENT_GITHUB_TOKEN: ${{ steps.agent.outputs.token }}
+```
+
+The App needs *Pull requests: write* to review, *Issues: write* to raise and close findings,
+*Contents: write* to push fix branches, and *Metadata: read*, which GitHub requires anyway. Install
+it on the repositories it reviews and nothing else — an installation is the boundary.
+
+By hand, outside CI, `scripts/app_token.py` mints the same token from the App's id and private key,
+so a live check speaks as the App rather than as its author. Keep the key out of the repository;
+`*.pem` is ignored.
 
 ```yaml
 permissions:

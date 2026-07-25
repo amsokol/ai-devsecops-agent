@@ -220,3 +220,6 @@ __marimo__/
 # Agent run records and locally vendored knowledge library
 .agent/
 /library/
+
+# Private key of the agent's GitHub App, which belongs in a secret store and never here
+*.pem
