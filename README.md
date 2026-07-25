@@ -27,10 +27,13 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.1.2` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.1.3` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
+
+Local Cursor runs on a machine that cannot provide the SDK sandbox need `sandbox: false` in
+`agent/config/execution.yaml` (or a `--config-dir` copy). The shipped default keeps the sandbox on.
 
 `--plan-only` builds and prints the plan without executing tasks, which is the way to see what a
 trigger would do. Add `--json` to print the run manifest instead of a summary, and `--no-cache` to

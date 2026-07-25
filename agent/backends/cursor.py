@@ -128,12 +128,22 @@ class CursorBackend:
             self._client = None
 
     def _failed(self, failure: Failure, error: Exception, started: float) -> SessionResult:
+        detail = str(error)
+        if "sandboxing is not supported" in detail.lower():
+            # The shipped default asks for a sandbox. When the machine cannot provide one, every
+            # session fails the same way, and the SDK's wording does not say which file to change.
+            detail = (
+                "this environment cannot provide the Cursor local sandbox. Set `sandbox: false` "
+                "in agent/config/execution.yaml (or a --config-dir copy of it) to run without it — "
+                "that is a deliberate decision, not a silent downgrade. Original: "
+                f"{error}"
+            )
         return SessionResult(
             backend=self.name,
             model=self.model,
             duration_ms=_elapsed(started),
             failure=failure,
-            detail=str(error),
+            detail=detail,
         )
 
 

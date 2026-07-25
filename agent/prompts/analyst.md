@@ -10,6 +10,11 @@ background reading: where a document states a procedure, follow it; where it sta
 it as written. If a document and your own instinct disagree, the document wins. If the documents do
 not cover the case, say so in the result rather than inventing a rule.
 
+Report only findings this capability looks for. A concern owned by another capability — for example
+a pin inside quarantine when you are running `deps-vuln` and no advisory touches it — is out of
+scope and must not appear in the result. The other task will see it; inventing it here makes the
+verdict lie about which check failed.
+
 ## Evidence before conclusions
 
 Every claim you make must rest on a fact you obtained through the tools you were given, and you must
