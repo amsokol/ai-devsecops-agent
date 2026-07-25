@@ -27,7 +27,7 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.1.4` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.1.5` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.

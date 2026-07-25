@@ -7,6 +7,7 @@ too large to parse — so the fact taken from it was heuristic for a reason unre
 
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -160,3 +161,43 @@ def test_a_small_answer_is_still_delivered(git_repo: Path) -> None:
     answer = kit.call("fetch", {"url": "https://pypi.org/pypi/ruff/0.16.0/json"})
     assert answer["kind"] == "api"
     assert answer["json"]["urls"][0]["upload_time"] == "2026"
+
+
+AN_INDEX = (
+    '{"info": {"name": "ruff"}, "releases": {'
+    + ",".join(f'"1.{n}.0": [{{"filename": "wheel-{"x" * 200}"}}]' for n in range(1_000))
+    + "}}"
+)
+
+
+def test_a_version_list_is_the_names_not_the_files(git_repo: Path) -> None:
+    """The fix for a task that spent 71% of a run's tokens on file metadata it never needed."""
+    kit = with_response(toolkit_for(git_repo, change=None), AN_INDEX)
+    answer = kit.call(
+        "fetch",
+        {"url": "https://pypi.org/pypi/ruff/json", "select": "releases", "keys_only": True},
+    )
+    assert len(answer["json"]) == 1_000
+    assert "1.999.0" in answer["json"]
+    assert "filename" not in json.dumps(answer)
+
+
+def test_a_selection_is_recorded_as_what_was_read(git_repo: Path) -> None:
+    kit = with_response(toolkit_for(git_repo, change=None), AN_INDEX)
+    kit.call("fetch", {"url": "https://pypi.org/pypi/ruff/json", "select": "info.name"})
+    assert kit.calls[-1].source.endswith("/pypi/ruff/json#info.name")
+
+
+def test_a_path_that_is_not_there_says_what_is(git_repo: Path) -> None:
+    kit = with_response(toolkit_for(git_repo, change=None), AN_INDEX)
+    with pytest.raises(Refused, match="releases"):
+        kit.call("fetch", {"url": "https://pypi.org/pypi/ruff/json", "select": "versions"})
+
+
+def test_keys_only_needs_something_with_keys(git_repo: Path) -> None:
+    kit = with_response(toolkit_for(git_repo, change=None), AN_INDEX)
+    with pytest.raises(Refused, match="only an object has keys"):
+        kit.call(
+            "fetch",
+            {"url": "https://pypi.org/pypi/ruff/json", "select": "info.name", "keys_only": True},
+        )

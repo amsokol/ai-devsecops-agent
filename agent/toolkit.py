@@ -200,9 +200,27 @@ class Toolkit:
                 description=(
                     "GET an allowlisted https URL with no credentials. A response that parses as "
                     "JSON counts as an API answer and is reproducible; anything else is a page and "
-                    "is heuristic."
+                    "is heuristic. Large documents are not handed over whole: name the part you "
+                    "need with 'select', and 'keys_only' when the names are the answer — a version "
+                    "list is the keys of a releases object, not the files inside it."
                 ),
-                schema=_schema({"url": _string("https URL")}, required=["url"]),
+                schema=_schema(
+                    {
+                        "url": _string("https URL"),
+                        "select": _string(
+                            "dot-separated path into the JSON document, for example 'releases' or "
+                            "'urls.0.upload_time'; a number indexes a list"
+                        ),
+                        "keys_only": {
+                            "type": "boolean",
+                            "description": (
+                                "return the selected object's keys instead of its contents, which "
+                                "is how a version list is obtained cheaply"
+                            ),
+                        },
+                    },
+                    required=["url"],
+                ),
                 run=self._fetch,
             ),
             Tool(
@@ -415,12 +433,24 @@ class Toolkit:
         # The distinction is mechanical, and that is the point: a page cannot be presented as an API
         # answer to earn the right to block.
         origin = Origin.API if parsed is not None else Origin.WEB
+        select = _optional(arguments.get("select"))
+        keys_only = bool(arguments.get("keys_only"))
         body = parsed if parsed is not None else response.body
+        if select is not None:
+            if parsed is None:
+                self._record_call("fetch", origin, response.url, ok=False, detail="not json")
+                raise Refused(f"{response.url} did not return JSON, so there is nothing to select")
+            body = _select(parsed, select, keys_only=keys_only)
+        elif keys_only:
+            raise Refused("keys_only needs a select naming the object whose keys you want")
         delivered, size = _deliverable(body)
+        # What was read, not just what was requested: a selected part is a different answer from the
+        # whole document, and a manifest that recorded only the URL could not be replayed.
+        source = response.url if select is None else f"{response.url}#{select}"
         call = self._record_call(
             "fetch",
             origin,
-            response.url,
+            source,
             ok=delivered is not None,
             detail="" if delivered is not None else f"not delivered: {size} chars",
         )
@@ -436,9 +466,10 @@ class Toolkit:
             # document nobody read cannot support a fact. Both problems have the same answer: ask a
             # narrower question.
             payload["not_delivered"] = (
-                f"the response is {size} chars, over the {MODEL_PAYLOAD_CHARS} this tool returns. "
-                "Request the narrower endpoint that answers only what you asked — for a single "
-                "version's metadata, that is usually the endpoint naming that version."
+                f"the answer is {size} chars, over the {MODEL_PAYLOAD_CHARS} this tool returns. "
+                "Ask a narrower question: 'select' the part you need, add 'keys_only' when the "
+                "names are the answer, or request the endpoint that names the single version you "
+                "are asking about."
             )
             if isinstance(parsed, dict):
                 payload["keys"] = sorted(str(key) for key in parsed)[:40]
@@ -635,6 +666,38 @@ _QUESTION = {
         "same name in every run, which is what makes a fact reusable"
     ),
 }
+
+
+def _select(document: Any, path: str, *, keys_only: bool) -> Any:
+    """Walk a dotted path into a parsed document, and optionally return only the names found there.
+
+    A registry's index of every release is the common case: the version list is the *keys* of that
+    object, and the megabytes are the file metadata under them.
+    """
+    current = document
+    walked: list[str] = []
+    for segment in path.split("."):
+        walked.append(segment)
+        if isinstance(current, dict) and segment in current:
+            current = current[segment]
+        elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
+            current = current[int(segment)]
+        else:
+            here = ".".join(walked)
+            available = (
+                ", ".join(sorted(str(key) for key in current)[:20])
+                if isinstance(current, dict)
+                else f"a {type(current).__name__}"
+            )
+            raise Refused(f"{here!r} is not in this document; at that point there is {available}")
+    if not keys_only:
+        return current
+    if not isinstance(current, dict):
+        raise Refused(
+            f"{path!r} is a {type(current).__name__}, and only an object has keys. Select it "
+            "without keys_only, or select deeper."
+        )
+    return sorted(str(key) for key in current)
 
 
 def _deliverable(body: Any) -> tuple[Any | None, int]:
