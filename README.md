@@ -141,10 +141,49 @@ is not read as the agent being unable to bump a dependency.
 
 A review run says nothing on the platform unless it is asked to: `--publish` with `--change`. Local
 runs report to the person who started them, and a pipeline that means to write in somebody's pull
-request says so in its own command line. Publishing needs `gh` on PATH and a credential it can read
-from the environment — usually `GH_TOKEN` — and the target repository comes from the checkout's own
-remote rather than from configuration, because a slug in a config file eventually disagrees with the
-checkout and then a review lands on the wrong repository.
+request says so in its own command line. Publishing needs `gh` on PATH, and the target repository
+comes from the checkout's own remote rather than from configuration, because a slug in a config file
+eventually disagrees with the checkout and then a review lands on the wrong repository.
+
+### Who the agent speaks as
+
+The credential is read from the environment, in this order, and never from the account a machine
+happens to be logged in as:
+
+| Variable | Use |
+| --- | --- |
+| `AGENT_GITHUB_TOKEN` | the agent's own credential; first, so a laptop with a developer's token still publishes as the agent |
+| `GH_TOKEN`, `GITHUB_TOKEN` | the client's own precedence, so there is no second rule to learn; in Actions the workflow's `GITHUB_TOKEN` posts as `github-actions[bot]` |
+
+With none of them set, nothing is published and the run says why. That refusal is deliberate: left to
+itself the client falls back to the stored login, and the first live check of this adapter published
+five machine-written reviews under a person's name. The name is the smaller half of the problem. A
+decision signed by a colleague cannot be told apart from that colleague's opinion — and a workflow
+that wakes the agent on human comments while filtering bots cannot filter a human account, so the
+agent's own comment wakes the agent, which comments, which wakes it again.
+
+The run records the account it published as, and if the platform will show that account as a person
+rather than a bot, `manifest.warnings` says so and names the filter the workflow needs. A dedicated
+machine account is a legitimate setup, so this is a caution rather than a refusal.
+
+For a repository of one's own, the workflow token is enough and needs no secret. For an agent that
+several repositories share, a GitHub App is the better identity: comments arrive from
+`<app>[bot]`, permissions are granted per installation rather than per person, and nobody's departure
+takes the reviewer with it. Mint an installation token in the workflow and put it in
+`AGENT_GITHUB_TOKEN`; nothing in the agent changes.
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write        # threads and review bodies; nothing else is needed
+steps:
+  - uses: actions/checkout@v5
+    with:
+      fetch-depth: 0          # the base is needed to know which lines the change touched
+  - run: uv run agent review --change ${{ github.event.pull_request.number }} --base ${{ github.base_ref }} --publish
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
 
 A run posts one review body — the same text as `report.md` — carrying the stance the result earns:
 `pass` approves, `blocked` requests changes, and `inconclusive` comments, because the check refuses
@@ -169,10 +208,10 @@ A finding whose line is outside the diff stays in the review body, because the p
 comment there and, if it did not, the comment would blame whoever wrote that line years ago.
 
 What the platform records is what the run reports. GitHub allows nobody to review their own pull
-request, approving or requesting changes alike, so a run on a change the agent opened has its decision
-recorded as a comment — and `manifest.actions` says so, rather than claiming a stance the pull request
-does not show. `scripts/live_publish_check.py` drives all of this against a real scratch change, which
-is how that behaviour was found in the first place.
+request, approving or requesting changes alike, so a run on a change the publishing account opened has
+its decision recorded as a comment — and `manifest.actions` says so, rather than claiming a stance the
+pull request does not show. `scripts/live_publish_check.py` drives all of this against a real scratch
+change, which is how that behaviour, and the identity problem above, were found in the first place.
 
 Two things stop publishing outright: a draft change, and a head that moved while the run was working —
 comments derived from one commit and posted on another point at lines nobody proposed. A platform

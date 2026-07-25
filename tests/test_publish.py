@@ -12,8 +12,9 @@ from agent.evidence import Reliability, Subject
 from agent.findings import Action, Finding, Klass, Location, Severity
 from agent.publish import Publication, publish_review
 from agent.repo import ChangeView, Repository
-from agent.scm import GitHub, ScmError, Stance
+from agent.scm import GitHub, ScmError, Stance, credential
 from agent.scm.fake import FakePlatform
+from agent.scm.github import Credential
 from agent.scm.marker import read, stamp
 from agent.verdict import Judged, TaskOutcome, Verdict
 
@@ -69,6 +70,10 @@ def publish(
 
 def what(record: Publication) -> list[str]:
     return [item.what for item in record.posted]
+
+
+def _token() -> Credential:
+    return Credential(token="not-a-real-token", variable="AGENT_GITHUB_TOKEN")  # noqa: S106
 
 
 @pytest.fixture
@@ -314,6 +319,68 @@ def test_a_thread_body_says_what_it_is_and_carries_its_key(
     assert read(body) == finding().key
 
 
+def test_a_bot_identity_is_recorded_and_needs_no_warning(platform: FakePlatform) -> None:
+    record = publish(platform, verdict_of(result=RunResult.PASS))
+
+    assert record.identity is not None
+    assert record.identity.login == "devsecops-agent[bot]"
+    assert not record.caution
+
+
+def test_publishing_under_a_human_account_is_said_out_loud(platform: FakePlatform) -> None:
+    """Not refused: a dedicated machine account is a legitimate setup, and the platform shows it as
+    an ordinary user. But a workflow that filters bot comments cannot filter it, so the agent's own
+    comment would wake the agent, and that is worth a sentence in the run's own record."""
+    platform.login = "amsokol"
+    platform.is_bot = False
+
+    record = publish(platform, verdict_of(result=RunResult.PASS))
+
+    assert record.published
+    assert "shows as a person" in record.caution
+    assert "filter that login" in record.caution
+
+
+def test_an_unreadable_identity_is_a_caution_rather_than_a_guess(platform: FakePlatform) -> None:
+    platform.known_identity = False
+    platform.login = ""
+
+    record = publish(platform, verdict_of(result=RunResult.PASS))
+
+    assert record.published
+    assert "could not be read" in record.caution
+
+
+def test_the_agent_s_token_is_read_from_its_own_variable_before_any_other() -> None:
+    """A laptop with a developer's `GH_TOKEN` in the environment still publishes as the agent."""
+    found = credential(
+        {"AGENT_GITHUB_TOKEN": "agent", "GH_TOKEN": "mine", "GITHUB_TOKEN": "workflow"}
+    )
+
+    assert (found.token, found.variable) == ("agent", "AGENT_GITHUB_TOKEN")
+
+
+@pytest.mark.parametrize(
+    ("environment", "variable"),
+    [
+        ({"GH_TOKEN": "one", "GITHUB_TOKEN": "two"}, "GH_TOKEN"),
+        ({"GITHUB_TOKEN": "two"}, "GITHUB_TOKEN"),
+        ({"AGENT_GITHUB_TOKEN": "   ", "GITHUB_TOKEN": "two"}, "GITHUB_TOKEN"),
+    ],
+)
+def test_the_remaining_variables_follow_the_client_s_own_precedence(
+    environment: dict[str, str], variable: str
+) -> None:
+    assert credential(environment).variable == variable
+
+
+def test_with_no_credential_nothing_is_published_at_all() -> None:
+    """The client would fall back to whatever account this machine is logged in as, and this
+    adapter's first live check did exactly that: five reviews under a person's name."""
+    with pytest.raises(ScmError, match="no credential for the agent"):
+        credential({"UNRELATED": "x"})
+
+
 def test_a_body_without_a_marker_belongs_to_nobody() -> None:
     assert read("looks like a finding but is not") == ""
     assert read(stamp("hello", "capabilities/x:a:b")) == "capabilities/x:a:b"
@@ -329,9 +396,9 @@ def test_a_body_without_a_marker_belongs_to_nobody() -> None:
     ],
 )
 def test_the_target_is_read_from_the_remote_in_every_form_git_writes_it(url: str) -> None:
-    assert GitHub.at(url).slug == "amsokol/ai-devsecops-agent"
+    assert GitHub.at(url, token=_token()).slug == "amsokol/ai-devsecops-agent"
 
 
 def test_a_remote_that_is_not_github_is_refused_rather_than_guessed() -> None:
     with pytest.raises(ScmError, match="not a GitHub remote"):
-        GitHub.at("git@gitlab.com:someone/else.git")
+        GitHub.at("git@gitlab.com:someone/else.git", token=_token())

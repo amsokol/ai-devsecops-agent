@@ -288,6 +288,8 @@ def run(
             manifest.warnings.append(f"nothing was published: {published.failure}")
         elif published.withheld:
             manifest.warnings.append(f"nothing was published: {published.withheld}")
+        if published.caution:
+            manifest.warnings.append(published.caution)
 
     manifest.cache = cache.stats.as_json() | {"writable": cache.writable}
     manifest.finish(verdict.result.value)

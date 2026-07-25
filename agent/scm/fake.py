@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from agent.scm import marker
-from agent.scm.port import Change, NewThread, Review, ScmError, Stance, Thread
+from agent.scm.port import Change, Identity, NewThread, Review, ScmError, Stance, Thread
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +26,10 @@ class Call:
 class FakePlatform:
     head: str = "head"
     author: str = "somebody"
+    login: str = "devsecops-agent[bot]"
+    """A bot by default, because that is the only identity a run should publish under."""
+    is_bot: bool = True
+    known_identity: bool = True
     draft: bool = False
     refuse_own_review: bool = False
     """Behave like GitHub does on a change the credentials themselves opened: no review event at
@@ -40,6 +44,10 @@ class FakePlatform:
     @property
     def name(self) -> str:
         return "fake"
+
+    def identity(self) -> Identity:
+        self._check()
+        return Identity(login=self.login, bot=self.is_bot, known=self.known_identity)
 
     def change(self, number: int) -> Change:
         self._check()

@@ -9,6 +9,9 @@ whether GitHub accepts what the adapter sends — the shape of a review payload,
 
 It publishes, then reruns, rewords, clears and brings back the same finding, printing what each pass
 did. Read the pull request afterwards: one thread, one marker, five states.
+
+Mind whose token is in the environment: whatever it is will own the comments. `--identity-only`
+answers that question first, and writes nothing.
 """
 
 from __future__ import annotations
@@ -20,9 +23,9 @@ from pathlib import Path
 from agent.domain import Outcome, RunResult
 from agent.evidence import Reliability, Subject
 from agent.findings import Action, Finding, Klass, Location, Severity
-from agent.publish import Publication, publish_review
+from agent.publish import Publication, caution_for, publish_review
 from agent.repo import ChangeView, Repository
-from agent.scm import GitHub
+from agent.scm import GitHub, ScmError
 from agent.verdict import Judged, TaskOutcome, Verdict
 
 CAPABILITY = "capabilities/deps-vuln"
@@ -47,15 +50,35 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--change", type=int, required=True)
     parser.add_argument("--base", default="main")
-    parser.add_argument("--path", required=True, help="a file this change touches")
+    parser.add_argument("--path", help="a file this change touches")
     parser.add_argument("--line", type=int, default=1, help="a line this change adds")
+    parser.add_argument(
+        "--identity-only",
+        action="store_true",
+        help="resolve the credential and read the account it speaks for, and write nothing",
+    )
     arguments = parser.parse_args()
 
     repository = Repository.open(arguments.repo)
-    platform = GitHub.of(repository)
+    try:
+        platform = GitHub.of(repository)
+    except ScmError as error:
+        # The same refusal a run turns into a warning, printed as a sentence: a traceback here would
+        # read like a defect, and "there is no credential for the agent" is an answer, not a crash.
+        print(f"nothing can be published: {error}")
+        return 1
+    identity = platform.identity()
+    print(f"platform {platform.name}")
+    print(f"token    {platform.credential.variable}")
+    print(f"identity {identity}")
+    if arguments.identity_only:
+        print(f"caution  {caution_for(identity)!r}")
+        return 0
+    if not arguments.path:
+        parser.error("--path is required unless --identity-only is given")
+
     change = ChangeView.of(repository, arguments.base)
     proposed = platform.change(arguments.change)
-    print(f"platform {platform.name}")
     print(f"change   {proposed.as_json()}")
     print(f"head     {repository.head}")
 

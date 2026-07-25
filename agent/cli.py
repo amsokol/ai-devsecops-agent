@@ -181,7 +181,11 @@ def _print_actions(actions: dict[str, object]) -> None:
             detail = f"  {item['detail']}" if item.get("detail") else ""
             print(f"  {item['what']:<10} {item['key']}{detail}")
     if actions.get("published"):
-        print(f"published {actions.get('stance')}  {actions.get('reference')}")
+        identity = actions.get("identity")
+        who = (
+            identity.get("login") or "an unreadable account" if isinstance(identity, dict) else "?"
+        )
+        print(f"published {actions.get('stance')} as {who}  {actions.get('reference')}")
 
 
 def _print_summary(record: RunRecord) -> None:

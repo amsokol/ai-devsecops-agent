@@ -172,6 +172,31 @@ def test_a_published_review_records_every_thread_it_touched(
     assert not any("published" in warning for warning in record.manifest.warnings)
 
 
+def test_a_checkout_with_nowhere_to_publish_still_keeps_its_verdict(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """No remote, and on this machine probably no credential either. By the time publishing is tried
+    the analysis is paid for, so this costs the comments and not the run."""
+    commit(git_repo, "src/api.py", "value = 1\n")
+    request = Request(
+        trigger=Trigger.CHANGE_OPENED,
+        repository=git_repo,
+        library_path=library_root,
+        overlay_path=overlay_root,
+        run_dir=tmp_path / "runs",
+        config_dir=config_dir,
+        base="main",
+        change=11,
+        publish=True,
+    )
+
+    record = run(request)
+
+    assert record.exit_code == int(ExitCode.OK)
+    assert record.manifest.result == "pass"
+    assert any("nothing was published" in warning for warning in record.manifest.warnings)
+
+
 def test_a_platform_the_run_cannot_reach_is_a_warning_and_not_a_lost_verdict(
     git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
 ) -> None:

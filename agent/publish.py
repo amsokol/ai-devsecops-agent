@@ -27,7 +27,7 @@ from agent.errors import ConfigError
 from agent.findings import Action
 from agent.repo import ChangeView
 from agent.scm import marker
-from agent.scm.port import NewThread, Platform, ScmError, Stance
+from agent.scm.port import Identity, NewThread, Platform, ScmError, Stance
 from agent.verdict import Judged, TaskOutcome, Verdict
 
 RESOLVED_NOTE = (
@@ -55,14 +55,17 @@ class Posted:
 
 @dataclass(slots=True)
 class Publication:
-    """What a run published, what it left alone, and why it stopped if it did."""
+    """What a run published, as whom, what it left alone, and why it stopped if it did."""
 
     published: bool = False
     stance: Stance | None = None
     reference: str = ""
+    identity: Identity | None = None
     posted: list[Posted] = field(default_factory=list)
     withheld: str = ""
     """Why nothing was published. Empty when the run did publish."""
+    caution: str = ""
+    """Published, but with something the team needs to know about how it will be read."""
     failure: str = ""
 
     def as_json(self) -> dict[str, Any]:
@@ -70,8 +73,10 @@ class Publication:
             "published": self.published,
             "stance": self.stance.value if self.stance else None,
             "reference": self.reference,
+            "identity": self.identity.as_json() if self.identity else None,
             "posted": [item.as_json() for item in self.posted],
             "withheld": self.withheld,
+            "caution": self.caution,
             "failure": self.failure,
         }
 
@@ -110,6 +115,8 @@ def _publish(
     outcomes: tuple[TaskOutcome, ...],
     change: ChangeView | None,
 ) -> Publication:
+    record.identity = platform.identity()
+    record.caution = caution_for(record.identity)
     proposed = platform.change(number)
     if proposed.draft:
         record.withheld = "the change is a draft, so the run reports without publishing"
@@ -178,6 +185,30 @@ def _publish(
     record.stance = review.stance
     record.published = True
     return record
+
+
+def caution_for(identity: Identity) -> str:
+    """Whether these comments will read — and behave — as a person's.
+
+    Not a refusal, because a dedicated machine account is a legitimate way to run this and the
+    platform shows it as an ordinary user. It is said out loud, once, because the consequence is not
+    cosmetic: a workflow that starts a run on human comments and filters bots cannot filter an
+    ordinary user, so the agent's own comment wakes the agent, which comments again.
+    """
+    if identity.trustworthy:
+        return ""
+    if not identity.known:
+        return (
+            "the credential's account could not be read, so it is not known whether these comments "
+            "will be shown as a machine's. If the workflow wakes on comments, filter by the login "
+            "that posts them"
+        )
+    return (
+        f"published as {identity.login}, which the platform shows as a person rather than a bot. A "
+        "machine's judgement under a human name is hard to tell from a colleague's opinion, and a "
+        f"workflow that filters bot comments will not filter {identity.login}: filter that login "
+        "explicitly, or publish with a bot credential"
+    )
 
 
 def _thread_body(judged: Judged) -> str:

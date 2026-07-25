@@ -1,12 +1,14 @@
 """GitHub, through its own command-line client.
 
 `gh` rather than raw HTTP, for reasons that are all about not reimplementing something that exists:
-it already knows how to read a token from the environment, retry a rate-limited call, follow
-pagination and speak GraphQL — and thread resolution has no REST endpoint at all, so GraphQL is not
-optional. The cost is a binary dependency, which CI runners ship and the ceiling already permits.
+it already knows how to retry a rate-limited call, follow pagination and speak GraphQL — and thread
+resolution has no REST endpoint at all, so GraphQL is not optional. The cost is a binary dependency,
+which CI runners ship and the ceiling already permits.
 
-The token is never in an argument, only in the environment `gh` inherits, so a command line that
-ends up in a log or a manifest cannot leak it.
+The one thing `gh` is *not* allowed to decide is who the agent is. Left alone it falls back to
+whatever account the machine is logged in as, and the first live check published a machine's review
+under a person's name. The token is therefore resolved here, from named variables, and passed in the
+environment — never in an argument, so a command line in a log cannot leak it.
 """
 
 from __future__ import annotations
@@ -16,17 +18,25 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self
 
+from agent.errors import ConfigError
 from agent.repo import Repository
 from agent.scm import marker
-from agent.scm.port import Change, NewThread, Review, ScmError, Stance, Thread
+from agent.scm.port import Change, Identity, NewThread, Review, ScmError, Stance, Thread
 
 CLIENT = "gh"
 TIMEOUT_SECONDS = 60
 THREAD_PAGE = 50
+
+TOKEN_VARIABLES = ("AGENT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+"""Where the credential is read from, in order. `AGENT_GITHUB_TOKEN` comes first so a machine that
+also has a developer's `GH_TOKEN` publishes as the agent; the other two follow the client's own
+precedence, so nobody has to learn a second rule. A stored login is deliberately not among them."""
+
+ACTIONS_IDENTITY = "github-actions[bot]"
 
 _REMOTE = re.compile(
     r"^(?:git@github\.com:|ssh://git@github\.com/|https://(?:[^@/]+@)?github\.com/)"
@@ -67,9 +77,41 @@ mutation($id: ID!) {
 
 
 @dataclass(frozen=True, slots=True)
+class Credential:
+    """A token and the variable it came from. The variable is safe to record; the token is not."""
+
+    token: str
+    variable: str
+
+
+def credential(environment: Mapping[str, str] | None = None) -> Credential:
+    """The agent's own token, or a refusal to publish at all.
+
+    Deliberately not "whatever the client can find". `gh` falls back to the account stored on the
+    machine, and on a laptop that is the developer: this adapter's first live check posted five
+    machine-written reviews under a person's name. Two things are wrong with that beyond the name.
+    The decision reads as a colleague's opinion, so nobody can tell judgement from tooling. And a
+    workflow that wakes on human comments and filters bots cannot filter a human account — the
+    agent's own comment wakes the agent, which comments, which wakes it again.
+    """
+    found = environment if environment is not None else os.environ
+    for variable in TOKEN_VARIABLES:
+        token = found.get(variable, "").strip()
+        if token:
+            return Credential(token=token, variable=variable)
+    named = ", ".join(TOKEN_VARIABLES)
+    raise ScmError(
+        f"no credential for the agent in the environment ({named}). Publishing under whatever "
+        "account this machine is logged in as would sign a machine's review with a person's name; "
+        "in CI, pass the workflow's GITHUB_TOKEN"
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class GitHub:
     owner: str
     repository: str
+    credential: Credential
 
     @property
     def name(self) -> str:
@@ -80,12 +122,16 @@ class GitHub:
         return f"{self.owner}/{self.repository}"
 
     @classmethod
-    def at(cls, url: str) -> Self:
+    def at(cls, url: str, *, token: Credential | None = None) -> Self:
         """The repository a remote URL names, in any of the forms git writes it."""
         found = _REMOTE.match(url.strip())
         if found is None:
             raise ScmError(f"not a GitHub remote: {url}")
-        return cls(owner=found.group("owner"), repository=found.group("name"))
+        return cls(
+            owner=found.group("owner"),
+            repository=found.group("name"),
+            credential=token or credential(),
+        )
 
     @classmethod
     def of(cls, repository: Repository, *, remote: str = "origin") -> Self:
@@ -99,7 +145,31 @@ class GitHub:
                 f"{CLIENT} is not installed, so nothing can be published. Install it, or run "
                 "without --publish and read the report instead"
             )
-        return cls.at(repository.remote(remote))
+        try:
+            url = repository.remote(remote)
+        except ConfigError as error:
+            # Reported as a platform problem rather than a configuration one, because by the time
+            # this is asked the run has already paid for its analysis. A checkout with no remote
+            # costs the comments, not the verdict.
+            raise ScmError(f"this checkout has no remote named {remote}: {error}") from None
+        return cls.at(url)
+
+    def identity(self) -> Identity:
+        """Whose account this token speaks for, asked rather than assumed.
+
+        An installation token — the one a workflow gets by default — cannot read `/user` at all, and
+        that refusal is itself the answer: only a machine credential behaves that way, and inside
+        Actions its name is known. Anywhere else, an unanswerable question stays unanswered rather
+        than being filled in with a guess about who is about to comment.
+        """
+        try:
+            got = self._api("user")
+        except ScmError:
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                return Identity(login=ACTIONS_IDENTITY, bot=True)
+            return Identity(login="", bot=False, known=False)
+        login = str(got.get("login", ""))
+        return Identity(login=login, bot=got.get("type") == "Bot" or login.endswith("[bot]"))
 
     def change(self, number: int) -> Change:
         got = self._api(f"repos/{self.slug}/pulls/{number}")
@@ -243,7 +313,7 @@ class GitHub:
                 text=True,
                 timeout=TIMEOUT_SECONDS,
                 check=False,
-                env=_environment(),
+                env=self._environment(),
             )
         except subprocess.TimeoutExpired:
             raise ScmError(f"{CLIENT} api {arguments[0]} timed out") from None
@@ -256,6 +326,15 @@ class GitHub:
         except json.JSONDecodeError:
             raise ScmError(f"{CLIENT} api {arguments[0]} did not answer with JSON") from None
         return got if isinstance(got, dict) else {"data": got}
+
+    def _environment(self) -> dict[str, str]:
+        """The client's environment, with the identity question already settled.
+
+        The token is stated rather than left to be found. `gh` prefers `GH_TOKEN` over everything
+        else, so setting it is also what takes the machine's stored login out of the picture: the
+        credential the run resolved is the credential the call uses, on a laptop and in CI alike.
+        """
+        return dict(os.environ) | {"GH_TOKEN": self.credential.token}
 
 
 def _complaint(finished: subprocess.CompletedProcess[str]) -> str:
@@ -288,13 +367,3 @@ def _complaint(finished: subprocess.CompletedProcess[str]) -> str:
 
 def _own_change(error: ScmError) -> bool:
     return "own pull request" in str(error).lower()
-
-
-def _environment() -> dict[str, str]:
-    """The environment `gh` needs, and not a token this code passes around itself.
-
-    Inherited wholesale rather than assembled: `gh` reads GH_TOKEN, GITHUB_TOKEN, a host
-    configuration file and a credential helper, and a hand-built environment would silently support
-    only the one the author happened to test with.
-    """
-    return dict(os.environ)

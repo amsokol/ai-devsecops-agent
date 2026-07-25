@@ -90,6 +90,29 @@ class Thread:
 
 
 @dataclass(frozen=True, slots=True)
+class Identity:
+    """Who the platform thinks is speaking.
+
+    Worth asking about, because the answer changes what the comments mean and what they cause. A
+    decision published under a person's account is a machine's judgement wearing somebody's name —
+    and, worse, a workflow that starts a run on human comments and filters bots is happily woken by
+    the agent's own comment, runs again, comments again.
+    """
+
+    login: str
+    bot: bool
+    known: bool = True
+
+    @property
+    def trustworthy(self) -> bool:
+        """True when the platform will show this as a machine, so a bot filter can see it."""
+        return self.known and self.bot
+
+    def as_json(self) -> dict[str, Any]:
+        return {"login": self.login, "bot": self.bot, "known": self.known}
+
+
+@dataclass(frozen=True, slots=True)
 class Review:
     """A published review, as the platform recorded it."""
 
@@ -119,6 +142,9 @@ class Platform(Protocol):
 
     @property
     def name(self) -> str: ...
+
+    def identity(self) -> Identity:
+        """Whose account the credential speaks for."""
 
     def change(self, number: int) -> Change: ...
 
