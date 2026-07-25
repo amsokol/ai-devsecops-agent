@@ -49,6 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
             "of fixed findings resolved. Needs --change and a credential the client can read"
         ),
     )
+    review.add_argument(
+        "--outside",
+        action="store_true",
+        help=(
+            "treat the head as code from outside this repository: read it, execute nothing from "
+            "it, prepare no fix. Established from the platform when it can be asked, so this is "
+            "for the cases where it cannot"
+        ),
+    )
     _add_wake(review)
 
     maintain = subcommands.add_parser("maintain", help="maintain the default branch")
@@ -194,6 +203,7 @@ def _request(arguments: argparse.Namespace) -> Request:
         change=getattr(arguments, "change", None),
         wake=woken,
         plan_only=arguments.plan_only,
+        outside=getattr(arguments, "outside", False),
         dry_run=getattr(arguments, "dry_run", False),
         publish=getattr(arguments, "publish", False),
         use_cache=not arguments.no_cache,

@@ -254,6 +254,7 @@ async def _attempts(
             tools=tuple((tool.name, tool.description) for tool in toolkit.tools()),
             attempt=number,
             invalid_reason=refused or rejection,
+            given=toolkit.caveats,
         )
 
     attempted = await run_attempts(

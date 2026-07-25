@@ -61,6 +61,14 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   the published comment — run, finding key, marker — is the agent's own.
 - A status note on an issue after a run somebody woke, written by the agent from recorded facts: what
   the check found, what the fix session did, and where the prepared change can be reviewed.
+- One decision, taken before any session starts, about whether this run may execute anything it
+  reads. A change whose head lives in this repository is the repository's own work and runs its
+  commands as before. A change from a fork is read and executed never: the command tool is not in the
+  toolkit, a session that asks for it anyway is told to record the gap instead, no fix branch and no
+  prepared patch are produced, and the report opens by saying so. A head the platform will not place
+  — because it was not asked, or would not answer — is treated as a fork, since a review that guesses
+  in the permissive direction is one an attacker can arrange by breaking a single API call.
+  `--outside` forces that posture and can only take permission away.
 
 ### Changed
 
@@ -84,8 +92,13 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   by. Where the two differ, the report says so in its first line. A base whose overlay this agent
   cannot read is the exception, and also says so: without it, the shape of an overlay could never
   change again, because every such change would need a run that already understood the new shape.
-- The pinned knowledge library is `0.4.1`: it names the two roles a comment wakes, narrows a woken
+- "How do I fix this?" on a fork gets a paragraph and a sentence saying why there is no change to
+  click: one could not have been verified without running the fork's code, and an unverified edit is
+  not worth offering.
+- The pinned knowledge library is `0.4.2`: it names the two roles a comment wakes, narrows a woken
   maintenance run to the finding it was written on, says that a fix task does not always end in a
-  branch — its change may be offered to whoever asked how to fix it — and records why the merge is held
-  by a required check rather than by the platform's approval flow, which matters to whoever sets up
-  branch protection.
+  branch — its change may be offered to whoever asked how to fix it — records why the merge is held
+  by a required check rather than by the platform's approval flow, and states what a review of a fork
+  may and may not establish, including the workflow shapes that hand a fork's code the job's
+  credentials. It also corrects the tool names it promised, which until now sent sessions calling
+  tools this agent never had.

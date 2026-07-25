@@ -77,6 +77,10 @@ class Manifest:
     skipped: list[dict[str, str]] = field(default_factory=list)
     grants: dict[str, list[str]] = field(default_factory=dict)
     """Binaries and hosts this run was permitted to use, so a `not-permitted` gap is explainable."""
+    posture: dict[str, Any] = field(default_factory=dict)
+    """Whose code this run read, and therefore whether it was allowed to execute any of it. Recorded
+    for every run: "the agent ran nothing over that fork" is a property somebody will want to check
+    afterwards, and it cannot be seen anywhere else in the record."""
     cache: dict[str, Any] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     findings: list[dict[str, Any]] = field(default_factory=list)
@@ -185,6 +189,7 @@ class Manifest:
             "tasks": [task.as_json() for task in self.tasks],
             "skipped": self.skipped,
             "grants": self.grants,
+            "posture": self.posture,
             "cache": self.cache,
             "evidence": self.evidence,
             "findings": self.findings,

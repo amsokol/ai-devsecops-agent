@@ -34,13 +34,16 @@ def render(
     unverified_facts: int = 0,
     fixes: tuple[Fix, ...] = (),
     notice: str = "",
+    restraint: str = "",
 ) -> str:
     lines = [f"## {HEADLINES[verdict.result]}", ""]
 
-    if notice:
-        # Above the findings, because it says which rules produced them. A reader who learns that
-        # after the verdict has already read the verdict as something it is not.
-        lines += [f"> {notice}.", ""]
+    # Above the findings, because they say which rules produced them and how much of the check was
+    # possible. A reader who learns either after the verdict has already read the verdict as
+    # something it is not.
+    for said in (notice, restraint):
+        if said:
+            lines += [f"> {said}.", ""]
 
     if verdict.result is RunResult.INCONCLUSIVE:
         lines += [
