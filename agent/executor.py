@@ -36,6 +36,8 @@ class Attempt:
     prompt_digest: str
     result_path: Path
     rejected: str = ""
+    salvaged: str = ""
+    """Where the result was actually found, when it was not where the prompt asked for it."""
 
     def as_json(self) -> dict[str, object]:
         return self.session.as_json() | {
@@ -43,6 +45,7 @@ class Attempt:
             "prompt_digest": self.prompt_digest,
             "result_path": str(self.result_path),
             "rejected": self.rejected,
+            "salvaged": self.salvaged,
         }
 
 
@@ -163,6 +166,24 @@ class Attempted[T]:
     """Why the last result file was refused, when no valid one arrived."""
 
 
+def _written(directory: Path, expected: Path) -> Path:
+    """The result file the session actually wrote, which is usually the one it was asked for.
+
+    A session works inside `directory`, so a file it wrote anywhere below it is its own output and
+    nobody else's — reading it is not a guess. This exists because the alternative is throwing away
+    a finished analysis over the spelling of a path, and paying for it twice; the manifest records
+    that the salvage happened, so a habit of writing elsewhere stays visible instead of becoming
+    invisible normal.
+    """
+    if expected.exists():
+        return expected
+    found = sorted(
+        (path for path in directory.rglob(expected.name) if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+    )
+    return found[-1] if found else expected
+
+
 async def run_attempts[T](
     task: PlannedTask,
     *,
@@ -185,7 +206,11 @@ async def run_attempts[T](
     for number in range(1, MAX_ATTEMPTS + 1):
         directory = tasks_dir / task.id / f"attempt-{number}"
         result_path = directory / "result.json"
-        prompt = prompt_for(number, rejection, result_path)
+        # Absolute in the prompt, relative in the record. A session's own file tools resolve a
+        # relative path against its working directory, which is not the repository root, and the
+        # first live run lost a whole analysis that way: the file was written one tree deeper and
+        # the task was retried from scratch. The manifest still reads as a path inside the run.
+        prompt = prompt_for(number, rejection, result_path.resolve())
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "prompt.md").write_text(prompt, encoding="utf-8")
 
@@ -214,8 +239,11 @@ async def run_attempts[T](
                 continue
             return attempted
 
+        written = _written(directory, result_path)
+        if written != result_path:
+            attempt.salvaged = str(written)
         try:
-            attempted.parsed = parse(result_path)
+            attempted.parsed = parse(written)
         except InvalidResult as error:
             attempt.rejected = str(error)
             rejection = str(error)

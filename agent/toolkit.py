@@ -284,15 +284,17 @@ class Toolkit:
                     "GET an allowlisted https URL with no credentials. A response that parses as "
                     "JSON counts as an API answer and is reproducible; anything else is a page and "
                     "is heuristic. Large documents are not handed over whole: name the part you "
-                    "need with 'select', and 'keys_only' when the names are the answer — a version "
-                    "list is the keys of a releases object, not the files inside it."
+                    "need with 'select', '*' for one field of every member, and 'keys_only' when "
+                    "the names are the answer — a version list is the keys of a releases object, "
+                    "or the tag name of each release, never the files and notes inside them."
                 ),
                 schema=_schema(
                     {
                         "url": _string("https URL"),
                         "select": _string(
-                            "dot-separated path into the JSON document, for example 'releases' or "
-                            "'urls.0.upload_time'; a number indexes a list"
+                            "dot-separated path into the JSON document, for example 'releases', "
+                            "'urls.0.upload_time' or '*.tag_name'; a number indexes a list, and "
+                            "'*' takes the rest of the path from every member"
                         ),
                         "keys_only": {
                             "type": "boolean",
@@ -582,8 +584,7 @@ class Toolkit:
                 "names are the answer, or request the endpoint that names the single version you "
                 "are asking about."
             )
-            if isinstance(parsed, dict):
-                payload["keys"] = sorted(str(key) for key in parsed)[:40]
+            payload |= _bearings(parsed)
         elif parsed is not None:
             payload["json"] = delivered
         else:
@@ -779,16 +780,39 @@ _QUESTION = {
 }
 
 
+EVERY = "*"
+"""The segment that walks into every member instead of one named member.
+
+The list of releases is the other shape a version list arrives in, and it is the shape GitHub uses.
+Without this there is no way to ask for one field of each element, so the only way to read tag names
+was to ask for the whole array — a hundred kilobytes of release notes, refused for being too large,
+which is what the first live run spent four calls discovering.
+"""
+
+
 def _select(document: Any, path: str, *, keys_only: bool) -> Any:
     """Walk a dotted path into a parsed document, and optionally return only the names found there.
 
     A registry's index of every release is the common case: the version list is the *keys* of that
     object, and the megabytes are the file metadata under them.
     """
-    current = document
-    walked: list[str] = []
-    for segment in path.split("."):
-        walked.append(segment)
+    current = _walk(document, tuple(path.split(".")), ())
+    if not keys_only:
+        return current
+    if not isinstance(current, dict):
+        raise Refused(
+            f"{path!r} is a {type(current).__name__}, and only an object has keys. Select it "
+            "without keys_only, or select deeper."
+        )
+    return sorted(str(key) for key in current)
+
+
+def _walk(current: Any, segments: tuple[str, ...], walked: tuple[str, ...]) -> Any:
+    """One step of `_select`, so that `*` can walk the rest of the path over every member."""
+    for index, segment in enumerate(segments):
+        walked += (segment,)
+        if segment == EVERY:
+            return _each(current, segments[index + 1 :], walked)
         if isinstance(current, dict) and segment in current:
             current = current[segment]
         elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
@@ -801,14 +825,48 @@ def _select(document: Any, path: str, *, keys_only: bool) -> Any:
                 else f"a {type(current).__name__}"
             )
             raise Refused(f"{here!r} is not in this document; at that point there is {available}")
-    if not keys_only:
-        return current
-    if not isinstance(current, dict):
+    return current
+
+
+def _each(current: Any, rest: tuple[str, ...], walked: tuple[str, ...]) -> list[Any]:
+    """The rest of the path, resolved in every member of a list or in every value of an object.
+
+    A member the path does not fit is left out rather than failing the whole call: a releases array
+    where one entry lacks the field is still an answer about the others, and refusing it would send
+    the model back to asking for the entire document.
+    """
+    if isinstance(current, dict):
+        members: list[Any] = list(current.values())
+    elif isinstance(current, list):
+        members = current
+    else:
         raise Refused(
-            f"{path!r} is a {type(current).__name__}, and only an object has keys. Select it "
-            "without keys_only, or select deeper."
+            f"{'.'.join(walked)!r} is a {type(current).__name__}, and '*' needs a list or an object"
         )
-    return sorted(str(key) for key in current)
+    collected: list[Any] = []
+    for member in members:
+        try:
+            collected.append(_walk(member, rest, walked))
+        except Refused:
+            continue
+    return collected
+
+
+def _bearings(parsed: Any) -> dict[str, Any]:
+    """Enough shape of a refused document for the next call to be the narrower one.
+
+    A refusal that says only "too large" leaves the model guessing at field names, and the guess it
+    makes is to fetch the same URL again. An object gets its keys; an array gets its length and the
+    keys of its first member, which is the path `*` needs.
+    """
+    if isinstance(parsed, dict):
+        return {"keys": sorted(str(key) for key in parsed)[:40]}
+    if isinstance(parsed, list):
+        bearings: dict[str, Any] = {"length": len(parsed)}
+        if parsed and isinstance(parsed[0], dict):
+            bearings["member_keys"] = sorted(str(key) for key in parsed[0])[:40]
+        return bearings
+    return {}
 
 
 def _deliverable(body: Any) -> tuple[Any | None, int]:

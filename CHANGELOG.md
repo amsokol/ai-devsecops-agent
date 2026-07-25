@@ -83,6 +83,17 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
 
 ### Changed
 
+- The result file is named to a session by absolute path, and a result written elsewhere inside the
+  session's own workspace is read where it landed rather than declared missing. The first live run on a
+  six-ecosystem repository finished an analysis, wrote the file one tree deeper — a relative path
+  resolved against the session's working directory, which is not the repository root — and paid for the
+  whole task twice. The record names the salvaged path, so a habit of writing elsewhere stays visible.
+- `fetch` can take one field from every member of a collection (`select: "*.tag_name"`), and a document
+  refused for its size now says how long it is and what a member holds. A list of releases is the shape
+  a version list arrives in from a hosting platform, and without a projection the only way to read tag
+  names was to ask for the array whole: a hundred kilobytes of release notes, refused, twice, because a
+  refusal that says only "too large" leaves nothing to narrow towards.
+
 - A status note on a woken issue now reports what the run actually did. It asked whether the owning
   check finished `clean`, which is the rule for *closing* an issue, so a recheck that found the
   finding still present always answered "the check did not finish" — and never mentioned the fix it

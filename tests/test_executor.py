@@ -110,6 +110,35 @@ def test_the_prompt_carries_the_knowledge_slice_and_the_notes(
     assert str(backend.briefs[0].result_path) in prompt
 
 
+def test_the_prompt_names_the_result_by_absolute_path(library: Library, tmp_path: Path) -> None:
+    """A session's file tools resolve a relative path against its working directory, not ours."""
+    backend = FakeBackend()
+
+    run(backend, library, tmp_path)
+
+    asked = backend.briefs[0].prompt.split("Write your result to: `")[1].split("`")[0]
+    assert Path(asked).is_absolute()
+
+
+def test_a_result_written_deeper_in_the_workspace_is_read_and_recorded_as_such(
+    library: Library, tmp_path: Path
+) -> None:
+    """The alternative is paying twice for an analysis that was finished and merely misfiled."""
+
+    class Misfiling(FakeBackend):
+        async def execute(self, brief: Brief) -> SessionResult:
+            elsewhere = brief.workspace / ".agent" / "runs" / "x" / "result.json"
+            elsewhere.parent.mkdir(parents=True, exist_ok=True)
+            elsewhere.write_text('{"outcome": "clean"}', encoding="utf-8")
+            return await super().execute(brief)
+
+    executed = run(Misfiling(default=Scripted(result=None)), library, tmp_path)
+
+    assert executed[0].outcome.outcome is Outcome.CLEAN
+    assert len(executed[0].attempts) == 1
+    assert executed[0].attempts[0].salvaged.endswith("runs/x/result.json")
+
+
 def test_a_valid_result_becomes_the_tasks_outcome(library: Library, tmp_path: Path) -> None:
     backend = FakeBackend(default=Scripted(result={"outcome": "findings", "findings": [finding()]}))
 
