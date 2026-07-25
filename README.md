@@ -29,7 +29,7 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.4.2` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.4.3` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
@@ -500,12 +500,47 @@ This is also why the caution about publishing under a human account matters: a w
 `[bot]` authors, but it cannot tell a machine account from a colleague. Publish as a bot, and pass
 `--actor` so the agent can compare accounts.
 
+## What waits for a person
+
+A major move breaks callers by definition, so the library says one ships only after somebody approves
+it. That used to be a sentence a session was asked to honour. It is arithmetic now, in two halves that
+fail in opposite directions:
+
+| Where the hold comes from | What it covers |
+| --- | --- |
+| the agent, from the versions | a semantic-version major, measured from the current pin to the `target` the finding states |
+| the check that found it, by saying so | the majors no comparison can see: a `@v5` to `@v7` action pin, an image tag, a raised toolchain floor |
+
+A held finding is reported and never changed — no branch, no change request, this run or any later
+one — and its issue says what it is waiting for and what a comment there will cause. The declared half
+can only add a hold, never remove one, so a session cannot argue its way past the policy; the measured
+half means forgetting to declare one cannot switch the policy off by omission. A security remediation
+is never held by the arithmetic: the library allows one to carry a major move because waiting is the
+greater risk, and a hold the agent invented would park an advisory fix behind a question nobody asked.
+
+The approval is a comment on that issue, from an account with write access, read by the same
+classifier as every other comment. What the run does with it is deterministic:
+
+1. the grant is written into the issue body as a stamp — who, which comment, what day;
+2. the check that owns the finding runs, narrowed to it;
+3. if it is still there, the fix is prepared, verified against the product's own commands, pushed and
+   proposed, with the change request naming the issue;
+4. the person is told all of that on the issue they wrote on.
+
+The stamp is why the question is asked exactly once. It lives in the body rather than in the agent's
+own memory because that is where the person granted it: "who approved this" is a question for whoever
+reads the issue, not for whoever has shell access. It also outlives a failure — a fix that will not
+verify is retried under the same approval next week — because approval is for the move, not for one
+attempt at it, and asking again every week is how people learn to approve without reading.
+
+A run that cannot read the issues cannot see the approvals, and then nothing that waits will ship: the
+finding is reported for one more week and the run says so in its warnings.
+
 ## Status
 
-Stage 7 is under way: a comment from a colleague wakes the agent, is read for what it asks for, and is
-answered in prose or turned into a recheck of the one finding it was written on. Preparing the patch a
-`fix` comment asks for, and holding a major upgrade until somebody approves it, are the slices still
-open in this stage.
+Stage 7 is complete: a comment from a colleague wakes the agent, is read for what it asks for, and is
+answered in prose, turned into the change it asks how to make, or read as the approval that releases a
+major move the agent was holding back.
 
 Stage 6 before it: a review run publishes its decision on GitHub and reconciles its threads by finding
 key; a maintenance run tracks its findings as issues by the same key, pushes what it verified and

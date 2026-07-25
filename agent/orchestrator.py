@@ -20,13 +20,13 @@ from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import Config, Models
-from agent.domain import FixOutcome, Plan, Role, Trigger
+from agent.domain import FixOutcome, Intent, Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
 from agent.escalate import Escalation, weigh
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
 from agent.intent import Course, Read, classify, narrow
-from agent.issues import Tracking, track_findings
+from agent.issues import LABEL, Tracking, track_findings
 from agent.library import Library
 from agent.manifest import Manifest
 from agent.overlay import MAINTENANCE, REVIEW, VALUES_FILE, Overlay, digest_on_disk, within
@@ -36,7 +36,7 @@ from agent.policy import BlockingRules
 from agent.posture import posture_for
 from agent.propose import propose_fixes
 from agent.publish import publish_review
-from agent.reconcile import caution_for, unproven
+from agent.reconcile import caution_for, concluded
 from agent.remediate import BRANCH_PREFIX, Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
@@ -46,6 +46,7 @@ from agent.state import Memory
 from agent.storage import FactCache
 from agent.toolkit import Toolkits
 from agent.tools import grant
+from agent.unlock import Approval, granted
 from agent.verdict import TaskOutcome, Verdict, decide, judge
 from agent.wake import Wake, Woken, admit
 
@@ -393,6 +394,8 @@ def run(
     ledger = Ledger(RunBudget(max_parallel=spend.tasks_at_once, tokens=spend.tokens_per_run))
 
     proposed: tuple[str, ...] = ()
+    tracked: tuple[Issue, ...] | None = None
+    approvals: dict[str, Approval] = {}
     if may_fix and request.publish:
         if speaker is None:
             may_fix = False
@@ -404,6 +407,18 @@ def run(
                 manifest.warnings.append(
                     f"no fix branches were prepared: the open change requests could not be read "
                     f"({error}), and preparing branches blind would duplicate ones already open"
+                )
+            # Which holds a person has released, read before anything is planned and reused when
+            # the issues are reconciled at the end. A run that cannot read them ships nothing that
+            # waits for approval, which is the safe direction: the finding is reported as waiting
+            # for one more week rather than changed on nobody's say-so.
+            try:
+                tracked = speaker.issues(label=LABEL)
+                approvals = granted(tracked)
+            except ScmError as error:
+                manifest.warnings.append(
+                    f"which findings a person has approved could not be read ({error}), so "
+                    "anything waiting for approval was left waiting"
                 )
 
     performed = asyncio.run(
@@ -425,12 +440,15 @@ def run(
             patching=patching,
             restraint=posture.aside,
             proposed=proposed,
+            approvals=approvals,
             close=owned,
         )
     )
     manifest.budget["spend"] = ledger.spend.as_json()
     if performed.read is not None:
         manifest.wake |= performed.read.as_json()
+    if performed.approval is not None:
+        manifest.wake |= {"unlocked": performed.approval.as_json()}
     _spent(manifest, performed)
     if performed.verdict is None:
         # A wake that answered or found nothing to do. There is no verdict, and inventing one would
@@ -459,6 +477,7 @@ def run(
         fixes=tuple(fixes),
         notice=notice,
         restraint=posture.restraint,
+        approvals=approvals,
     )
 
     if request.publish and speaker is not None:
@@ -483,6 +502,8 @@ def run(
             change=session.change,
             fixes=tuple(fixes),
             new_issues=overlay.queue.max_new_issues_per_run,
+            tracked=tracked,
+            approvals=approvals,
             escalations=escalations,
             memory=remembered,
             document=document,
@@ -513,6 +534,8 @@ class Performed:
     read: Read | None = None
     """How a comment was read, when one woke this run."""
     answered: Answered | None = None
+    approval: Approval | None = None
+    """The hold a person released in this run, when their comment did that."""
     halted: str = ""
     """Why the run stopped after reading the comment, when it did."""
 
@@ -536,6 +559,7 @@ async def _conduct(
     patching: bool,
     restraint: str,
     proposed: tuple[str, ...],
+    approvals: dict[str, Approval],
     close: bool,
 ) -> Performed:
     """Everything that needs a model, in one event loop, including the shutdown.
@@ -562,6 +586,7 @@ async def _conduct(
                 ledger=ledger,
                 patching=patching,
                 restraint=restraint,
+                approvals=approvals,
             )
             if performed.halted or performed.answered is not None:
                 return performed
@@ -581,6 +606,7 @@ async def _conduct(
             ledger=ledger,
             may_fix=may_fix,
             proposed=proposed,
+            approvals=approvals,
         )
         return performed
     finally:
@@ -604,6 +630,7 @@ async def _episode(
     ledger: Ledger,
     patching: bool,
     restraint: str,
+    approvals: dict[str, Approval],
 ) -> Plan:
     """Read the comment, then do the one thing the table says it asks for.
 
@@ -660,6 +687,7 @@ async def _episode(
                 run=manifest.run_id,
             )
         case Course.RECHECK:
+            _release(performed, woken, approvals=approvals, when=toolkits.now)
             narrowed, why = narrow(plan, woken.key)
             if why:
                 performed.halted = f"nothing was re-established: {why}"
@@ -669,6 +697,32 @@ async def _episode(
                 manifest.replan(narrowed)
                 return narrowed
     return plan
+
+
+def _release(
+    performed: Performed,
+    woken: Woken,
+    *,
+    approvals: dict[str, Approval],
+    when: datetime,
+) -> None:
+    """Record the permission a comment granted, so the rest of this run can act on it.
+
+    Only an `unlock`, and only on an issue: a hold is a thing an issue tracks, and a comment in a
+    review thread has none to release. Everything that made this safe has already happened — the
+    platform said this account may write here, the comment was confirmed to be theirs, and a
+    classification the model was unsure about took the answering course instead of this one.
+
+    The grant is a fact from here on. It decides what the fix queue may take, and it is written into
+    the issue body when the issues are reconciled, which is what stops the next run asking again.
+    """
+    classified = performed.read.classification if performed.read else None
+    if classified is None or classified.intent is not Intent.UNLOCK or woken.issue is None:
+        return
+    performed.approval = Approval(
+        by=woken.said.author, comment=woken.wake.comment, at=when.date().isoformat()
+    )
+    approvals[woken.key] = performed.approval
 
 
 async def _perform(
@@ -688,6 +742,7 @@ async def _perform(
     ledger: Ledger,
     may_fix: bool,
     proposed: tuple[str, ...],
+    approvals: dict[str, Approval],
 ) -> None:
     """Analyse, decide, and then — on a maintenance run — fix what the decision allows."""
     performed.executed = await execute(
@@ -712,6 +767,7 @@ async def _perform(
         repository=repository,
         max_open_fix_requests=overlay.queue.max_open_fix_requests,
         proposed=proposed,
+        approvals=approvals,
     )
     performed.fixes = await apply(
         performed.queue,
@@ -876,6 +932,8 @@ def _announce(
     change: ChangeView | None,
     fixes: tuple[Fix, ...],
     new_issues: int,
+    tracked: tuple[Issue, ...] | None = None,
+    approvals: dict[str, Approval] | None = None,
     escalations: tuple[Escalation, ...] = (),
     memory: Memory | None = None,
     document: dict[str, Any] | None = None,
@@ -902,19 +960,21 @@ def _announce(
     caution = caution_for(identity)
 
     if request.trigger.is_maintenance:
-        tracked = track_findings(
+        recorded = track_findings(
             platform,
             verdict=verdict,
             outcomes=outcomes,
             head=repository.head,
             limit=new_issues,
             escalations=escalations,
+            known=tracked,
+            approvals=approvals,
         )
-        actions["issues"] = tracked.as_json()
+        actions["issues"] = recorded.as_json()
         if escalations:
             actions["escalations"] = [item.as_json() for item in escalations]
-        if tracked.failure:
-            manifest.warnings.append(f"the tracked issues are incomplete: {tracked.failure}")
+        if recorded.failure:
+            manifest.warnings.append(f"the tracked issues are incomplete: {recorded.failure}")
         if memory is not None:
             # Written after the issues, so a streak is only recorded as continuing once the run has
             # done what the streak is for. A memory stored before the write, in a run that then
@@ -933,7 +993,7 @@ def _announce(
                 fixes=fixes,
                 path=repository.path,
                 base=repository.branch,
-                issues=tracked.numbers,
+                issues=recorded.numbers,
                 run=manifest.run_id,
             )
             actions["changes"] = opened.as_json()
@@ -951,7 +1011,8 @@ def _announce(
                 outcomes=outcomes,
                 fixes=fixes,
                 proposals=proposals,
-                tracked=tracked,
+                tracked=recorded,
+                approval=(approvals or {}).get(woken.key),
                 run=manifest.run_id,
             )
             actions["status"] = {"posted": not failed, "failure": failed}
@@ -1000,6 +1061,7 @@ def _report_back(
     fixes: tuple[Fix, ...],
     proposals: dict[str, tuple[str, str]],
     tracked: Tracking,
+    approval: Approval | None,
     run: str,
 ) -> str:
     """Tell the person on the issue they commented on what came of it, or say why that failed.
@@ -1016,11 +1078,12 @@ def _report_back(
     what, detail = proposals.get(key, ("", ""))
     aftermath = Aftermath(
         still_found=any(item.finding.key == key for item in verdict.judged),
-        proven=unproven(key, outcomes) is None,
+        proven=concluded(key, outcomes),
         fixed=fix is not None and fix.outcome is FixOutcome.FIXED,
         fix_detail=fix.detail if fix is not None else "",
         proposal=detail if what == "proposed" else "",
         problem=detail if what and what != "proposed" else "",
+        approved=approval.sentence if approval is not None else "",
     )
     if fix is None and not aftermath.problem:
         aftermath = replace(

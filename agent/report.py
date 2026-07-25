@@ -14,6 +14,7 @@ from agent.domain import RunResult, Trigger
 from agent.evidence import Reliability
 from agent.findings import Action, Severity
 from agent.remediate import Fix
+from agent.unlock import Approval, waiting
 from agent.verdict import Judged, TaskOutcome, Verdict
 
 SEVERITY_ORDER = (Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL)
@@ -35,6 +36,7 @@ def render(
     fixes: tuple[Fix, ...] = (),
     notice: str = "",
     restraint: str = "",
+    approvals: dict[str, Approval] | None = None,
 ) -> str:
     lines = [f"## {HEADLINES[verdict.result]}", ""]
 
@@ -84,6 +86,7 @@ def render(
         ]
         lines.append("")
 
+    lines += _waiting(verdict, approvals or {})
     lines += _fixes(fixes)
 
     if not verdict.judged and not verdict.failed_tasks:
@@ -95,6 +98,31 @@ def render(
         footer += f" {unverified_facts} fact(s) could not be established."
     lines.append(footer)
     return "\n".join(lines) + "\n"
+
+
+def _waiting(verdict: Verdict, approvals: dict[str, Approval]) -> list[str]:
+    """Findings that will not be touched until somebody says so, and what saying so takes.
+
+    Kept out of the fixes section deliberately. "Not shipped" there means the run tried and could
+    not; this means it did not try, on purpose, and reading the two as the same thing is how a hold
+    turns into a suspicion that the agent is quietly failing.
+    """
+    held = [(item, waiting(item.finding, approvals)) for item in verdict.judged]
+    pending = [(item, reason) for item, reason in held if reason]
+    if not pending:
+        return []
+    lines = ["### Waiting for approval", ""]
+    for item, reason in pending:
+        finding = item.finding
+        named = finding.subject.package or finding.subject.path or finding.capability
+        lines.append(f"- {named} — {reason}")
+    lines += [
+        "",
+        "Each of these is tracked as an issue. A comment there from somebody with write access is "
+        "what releases it; the next run then prepares the change and verifies it.",
+        "",
+    ]
+    return lines
 
 
 def _fixes(fixes: tuple[Fix, ...]) -> list[str]:

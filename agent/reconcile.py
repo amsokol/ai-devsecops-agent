@@ -48,6 +48,22 @@ def unproven(key: str, outcomes: tuple[TaskOutcome, ...]) -> str | None:
     return None
 
 
+def concluded(key: str, outcomes: tuple[TaskOutcome, ...]) -> bool:
+    """Whether the check that owns this finding reached a result this run.
+
+    A different question from `unproven`, and confusing the two is how the answer to "what happened
+    to the thing I approved?" became "the check did not finish" in every case where it had. Closing
+    an issue needs the owning task to have finished *clean*, because absence is the claim. Telling
+    somebody what the run did needs only that it finished at all — and a task that reports the
+    finding again has finished, informatively.
+    """
+    capability = key.split(":", 1)[0]
+    owning = [item for item in outcomes if item.capability == capability]
+    return bool(owning) and all(
+        item.outcome in {Outcome.CLEAN, Outcome.FINDINGS} for item in owning
+    )
+
+
 def caution_for(identity: Identity) -> str:
     """Whether what this run writes will read — and behave — as a person's.
 

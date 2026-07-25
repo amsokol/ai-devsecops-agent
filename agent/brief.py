@@ -57,7 +57,9 @@ RESULT_SHAPE = """\
       "remediation": "what to do, when known",
       "advisory": "advisory identifier, for dependency findings",
       "symbol": "enclosing function or type, for code findings",
-      "forbidden_state": false
+      "forbidden_state": false,
+      "target": "the version the remediation moves to, for a version move",
+      "needs_unlock": false
     }
   ]
 }
@@ -75,6 +77,12 @@ Rules the validator enforces:
 * one finding per problem. Four advisories against one pin are four findings, each with its own
   `advisory`; the report groups them, and a human answering one of them does not silence the rest.
 * every entry in `evidence` must be a key a tool returned in this run.
+* `target` is the version the remediation moves to. Give it whenever there is one: the agent
+  measures the size of the move itself, and a move it cannot measure is one it cannot hold back.
+* `needs_unlock` is for a change that a person must approve before it ships, as the knowledge
+  defines that. Set it for the majors no comparison can see — a floating action pin, a raised
+  toolchain or language floor, a runtime image tag. A plain semantic-version major needs no flag:
+  give `target` and the agent works it out. The flag only ever adds a hold; it cannot remove one.
 * no other fields are allowed anywhere in the file."""
 
 
