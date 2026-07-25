@@ -15,16 +15,24 @@ from agent.errors import ExitCode
 class Trigger(StrEnum):
     CHANGE_OPENED = "change-opened"
     CHANGE_UPDATED = "change-updated"
-    HUMAN_COMMENT = "human-comment"
-    """Somebody answered one of the agent's issues, which is maintenance work with a person waiting.
-    Never a comment in a change-request conversation: that one is the review's business."""
+    COMMENT_ON_CHANGE = "comment-on-change"
+    """Somebody replied in one of the agent's threads on a change: a remark on a line, answered.
+
+    A wake has two questions, and they are answered by different things. *Where* the comment is
+    decides which playbook applies — this one is the review's business, a comment on an issue is
+    maintenance — and that is known from the event, before any model runs. *What it says* decides
+    only the course, and that is the one place a model reads free text.
+    """
+    COMMENT_ON_ISSUE = "comment-on-issue"
+    """Somebody answered one of the agent's issues, which is maintenance work with a person
+    waiting."""
     MAINTAIN_REQUESTED = "maintain-requested"
     MAINTAIN_SCHEDULED = "maintain-scheduled"
 
     @property
     def is_maintenance(self) -> bool:
         return self in {
-            Trigger.HUMAN_COMMENT,
+            Trigger.COMMENT_ON_ISSUE,
             Trigger.MAINTAIN_REQUESTED,
             Trigger.MAINTAIN_SCHEDULED,
         }
@@ -36,7 +44,7 @@ class Trigger(StrEnum):
     @property
     def is_woken(self) -> bool:
         """Somebody's words started this run, which is the one case where who they were matters."""
-        return self is Trigger.HUMAN_COMMENT
+        return self in {Trigger.COMMENT_ON_CHANGE, Trigger.COMMENT_ON_ISSUE}
 
 
 class Role(StrEnum):
@@ -71,6 +79,34 @@ class FixOutcome(StrEnum):
     @property
     def shipped(self) -> bool:
         return self is FixOutcome.FIXED
+
+
+class Intent(StrEnum):
+    """What somebody's comment asks the agent for.
+
+    The one vocabulary a model assigns to free text. It is deliberately small and deliberately not
+    an action: what each intent causes is a table in `agent.intent`, so a misread comment costs a
+    wasted session and never a permission the person did not give.
+    """
+
+    UNLOCK = "unlock"
+    """Permission for the change the agent said it was holding back."""
+    FIX = "fix"
+    """How to fix it, or a fix prepared."""
+    QUESTION = "question"
+    """An explanation, which is answered without touching anything."""
+    RECHECK = "recheck"
+    """The facts have changed — look again."""
+    UNRELATED = "unrelated"
+    """Nothing the agent does. A run that stops here is the cheapest correct outcome there is."""
+
+
+class AnswerOutcome(StrEnum):
+    """How an answering session ended. Its own vocabulary, because it produces no findings."""
+
+    ANSWERED = "answered"
+    UNVERIFIED = "unverified"
+    EXHAUSTED = "exhausted"
 
 
 class Reason(StrEnum):

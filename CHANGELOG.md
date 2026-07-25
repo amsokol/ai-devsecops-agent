@@ -40,11 +40,30 @@ The first release is not cut yet, so this section is the whole history: what the
 - Restraints for the run nobody watches: silence when there is nothing new, a ceiling on how many
   issues and fix branches it may leave behind, its own spending limits, cross-run memory in
   `refs/agent/state`, and an escalation issue when the same check fails twice in a row.
-- A refusal to be woken by itself or by another bot, so a comment the agent wrote cannot start the
-  next run.
+- Being woken by a comment: somebody replies in one of the agent's threads or on one of its issues,
+  the `intent` role reads what they ask for, and a table in code turns that into one of three courses
+  — answer in prose, re-establish the one finding it was written on, or do nothing. Where the comment
+  was left decides the playbook before any model runs; what it says decides only the course.
+- The `writer` role, used for exactly one thing: replying to a person. The answering session can read
+  the repository and gets no worktree, the reply resolves nothing and closes nothing, and every fact in
+  the published comment — run, finding key, marker — is the agent's own.
+- A status note on an issue after a run somebody woke, written by the agent from recorded facts: what
+  the check found, what the fix session did, and where the prepared change can be reviewed.
 
 ### Changed
 
+- `--wake-comment <id>` names the comment that woke a run and is required with `--actor`. A wake with
+  no comment to read is a run guessing what it was asked. The `human-comment` trigger is now
+  `comment-on-change` and `comment-on-issue`, so the playbook comes from the event rather than from a
+  model's reading of free text.
+- A refusal to act on a comment now covers everything that can be checked before spending anything: a
+  bot, the agent's own account, an account without write access — including one the platform will not
+  answer about — a conversation with no marker, and a comment whose author is not the actor the event
+  named. Each is recorded as a declined run with its reason, because "it did not take orders from a
+  reader" is a property that has to be visible to be believed.
+- `review.models` and `maintenance.models` in the overlay now also bind `intent` and `writer`. Both are
+  required wherever a comment can wake a run, checked at startup: discovering that the answering model
+  is unbound after classifying would leave a person with silence.
 - Models and spending ceilings live in the product's overlay and nowhere else; the agent ships no
   model name and no ceiling. The overlay is organised by kind of run — `review:` and `maintenance:`,
   each with its own models and limits — because a product outlives any one provider and switching
@@ -53,5 +72,5 @@ The first release is not cut yet, so this section is the whole history: what the
   by. Where the two differ, the report says so in its first line. A base whose overlay this agent
   cannot read is the exception, and also says so: without it, the shape of an overlay could never
   change again, because every such change would need a run that already understood the new shape.
-- The pinned knowledge library is `0.3.0`, the first release whose overlay is organised by kind of
-  run.
+- The pinned knowledge library is `0.4.0`, the first release that names the two roles a comment wakes
+  and narrows a woken maintenance run to the finding it was written on.

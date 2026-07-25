@@ -82,6 +82,8 @@ schema: 1
 review:
   models:
     analyst: fake/composer-2.5
+    intent: fake/composer-2.5
+    writer: fake/composer-2.5
   limits:
     tokens_per_run: 24000000
     minutes_per_task: 15
@@ -90,6 +92,8 @@ maintenance:
   models:
     analyst: fake/composer-2.5
     fixer: fake/composer-2.5
+    intent: fake/composer-2.5
+    writer: fake/composer-2.5
   limits:
     tokens_per_run: 12000000
     minutes_per_task: 10

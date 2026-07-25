@@ -9,6 +9,9 @@ playbook: playbooks/pr-review
 triggers:
   - change-opened
   - change-updated
+  # A reply in one of the agent's threads on this change is the review's business, not the branch's:
+  # the remark being asked about is here, and so is the code it points at.
+  - comment-on-change
 
 # Split a capability into per-directory shards only when its prepared context exceeds this size.
 # The split is a function of the diff, so the same input always shards the same way.

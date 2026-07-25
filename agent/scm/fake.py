@@ -14,7 +14,9 @@ from pathlib import Path
 
 from agent.scm import marker
 from agent.scm.port import (
+    Authority,
     Change,
+    Comment,
     Identity,
     Issue,
     NewChange,
@@ -66,6 +68,12 @@ class FakePlatform:
     bodies: list[tuple[str, str]] = field(default_factory=list)
     unpushable: tuple[str, ...] = ()
     """Branches the platform will refuse, which is what an earlier run's leftover branch does."""
+    said: dict[int, Comment] = field(default_factory=dict)
+    """Comments somebody left, by identifier: what a run woken by one of them reads."""
+    writers: tuple[str, ...] = ()
+    """Accounts with write access. Everyone else is a reader, and an account named in `strangers` is
+    one the platform will not answer about at all."""
+    strangers: tuple[str, ...] = ()
 
     @property
     def name(self) -> str:
@@ -79,9 +87,36 @@ class FakePlatform:
             known=self.known_identity,
         )
 
+    def authority(self, login: str) -> Authority:
+        self._check()
+        if not login or login in self.strangers:
+            return Authority(login=login, writes=False, known=False)
+        return Authority(login=login, writes=login in self.writers)
+
     def change(self, number: int) -> Change:
         self._check()
         return Change(number=number, head=self.head, author=self.author, draft=self.draft)
+
+    def change_comment(self, number: int, comment: int) -> Comment:
+        self._check()
+        return self._said(comment)
+
+    def issue_at(self, number: int) -> Issue | None:
+        self._check()
+        found = next((item for item in self.tracked if item.number == number), None)
+        if found is None:
+            raise ScmError(f"no issue {number}")
+        return found if found.key else None
+
+    def issue_comment(self, issue: int, comment: int) -> Comment:
+        self._check()
+        return self._said(comment)
+
+    def _said(self, comment: int) -> Comment:
+        found = self.said.get(comment)
+        if found is None:
+            raise ScmError(f"no comment {comment}")
+        return found
 
     def threads(self, number: int) -> tuple[Thread, ...]:
         self._check()
@@ -99,7 +134,10 @@ class FakePlatform:
             self.opened.append(
                 Thread(
                     id=f"thread-{len(self.opened) + 1}",
-                    comment=f"comment-{len(self.opened) + 1}",
+                    # Numeric, as the platform's own is: a wake finds its thread by the identifier
+                    # of the comment the marker lives in, and a fake that used a different shape
+                    # here would let that lookup pass in tests and fail in life.
+                    comment=str(len(self.opened) + 1),
                     key=marker.read(item.body),
                     body=item.body,
                     number=number,

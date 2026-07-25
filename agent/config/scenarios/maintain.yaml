@@ -8,9 +8,10 @@ playbook: playbooks/maintain
 triggers:
   - maintain-requested
   - maintain-scheduled
-  # A comment on one of the agent's issues is maintenance work with a person waiting for it, so it
-  # plans the same tasks. Which issue woke the run is what the run does first, not a different plan.
-  - human-comment
+  # A comment on one of the agent's issues is maintenance work with a person waiting for it, so the
+  # same tasks are planned. What the comment asks for then narrows that plan to the one finding the
+  # issue tracks — or replaces it with an answer, when nothing needs re-establishing.
+  - comment-on-issue
 
 split_threshold_bytes: 400000
 

@@ -24,12 +24,12 @@ afterwards, is in [`CHANGELOG.md`](CHANGELOG.md).
 uv sync
 uv run agent review  --repo . --change 12 --base main --library ./library [--publish]
 uv run agent maintain --repo . --library ./library [--scheduled] [--publish]
-uv run agent maintain --repo . --library ./library --wake-issue 7 --actor <login>
+uv run agent maintain --repo . --library ./library --wake-issue 7 --wake-comment 42 --actor <login>
 uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.2.0` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.4.0` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
@@ -397,25 +397,67 @@ so it is in nobody's history — chained forward so no push is ever forced, and 
 something new to say. A run whose memory cannot be stored says so in its warnings and carries on: the
 cost is that next week's repeat may read as a first failure, which is the safe direction.
 
-## Not waking on its own voice
+## Being woken by a comment
 
-`maintain --wake-issue N --actor <login>` is how a comment on a tracked issue starts a run. The actor
-is checked before anything is spent, and the run ends as `declined` if the comment was a bot's, or if
-the login is the account the agent itself publishes as. An agent that answers its own comment answers
-it forever, and each turn of that loop costs a model.
+Somebody replies in one of the agent's threads, or on one of its issues, and a run follows:
 
-This is why the caution about publishing under a human account matters: a workflow can filter `[bot]`
-authors, but it cannot tell a machine account from a colleague. Publish as a bot, or pass `--actor` and
-let the agent compare accounts.
+```bash
+uv run agent review   --change 12 --base main --wake-comment 2103847 --actor <login> --publish
+uv run agent maintain --wake-issue 7 --wake-comment 2103999 --actor <login> --publish
+```
+
+Where the comment was left decides the playbook, and that is known from the event before any model
+runs: a reply in a review thread is the review's business, a comment on an issue is maintenance. What
+the comment *says* decides only the course, and that is the one place a model reads free text.
+
+The classifier assigns one of five intents — `unlock`, `fix`, `question`, `recheck`, `unrelated` —
+and a table in code turns that into a course. The separation is the safety property: the worst a
+misread comment can do is answer instead of act, or re-establish a fact nobody asked about.
+
+| Read as | What the run does |
+| --- | --- |
+| `question`, `fix` | replies in the conversation and changes nothing |
+| `unlock`, `recheck` | runs the check that owns that one finding, then reports as a maintenance run does |
+| `unrelated` | nothing at all, and writes nowhere: a machine that answers "thanks!" is a machine people mute |
+| anything, but unsure | replies. An unsure `unlock` is permission nobody gave |
+
+A recheck is narrow on purpose: only the capability the finding belongs to, in its own ecosystem. A
+person who writes on one issue is asking about one thing, and a weekly sweep in reply would make
+approving something the most expensive thing a person can do. On an issue the run also posts what came
+of it — every sentence of that status is a recorded fact, written by the agent rather than a model —
+because a run that closed the issue silently reads exactly like being ignored.
+
+Four things end the run before the first model call, each recorded as `declined` with its reason:
+
+| Refused when | Why it is not a judgement call |
+| --- | --- |
+| the actor is a bot, or the account the agent publishes as | answering its own comment is a loop, and each turn of it costs a model |
+| the account has no write access, or the platform will not say | a comment is a way to spend somebody's budget and, for an unlock, to grant permission. The permissive mistake cannot be taken back |
+| the issue or thread carries no marker | a remark the agent never made is not one it can answer for, and there is no finding key in it |
+| the comment's author is not the actor the event named | something is passing one person's authority with another person's words, and the words are what would act |
+
+The reply itself is text and nothing else. No thread is resolved by it, no issue is closed by it, and
+the answering session gets no worktree, so it can read the repository and cannot change it. Everything
+factual in the published comment — the run identifier, the finding key, the marker that makes later
+runs recognise it as the agent's own — comes from the agent; the session supplies only the explanation.
+
+This is also why the caution about publishing under a human account matters: a workflow can filter
+`[bot]` authors, but it cannot tell a machine account from a colleague. Publish as a bot, and pass
+`--actor` so the agent can compare accounts.
 
 ## Status
 
-Stage 6 is complete. A review run publishes its decision on GitHub and reconciles its threads by
-finding key; a maintenance run tracks its findings as issues by the same key, pushes what it verified
-and proposes it as a change request; a scheduled run holds itself back as described above, remembers
-which checks keep failing, and refuses to be woken by its own comment. Under that sit the decision
-path, the tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets; every analyst
-capability the library defines can run, and a run can be narrowed with `--only` (for example
+Stage 7 is under way: a comment from a colleague wakes the agent, is read for what it asks for, and is
+answered in prose or turned into a recheck of the one finding it was written on. Preparing the patch a
+`fix` comment asks for, and holding a major upgrade until somebody approves it, are the slices still
+open in this stage.
+
+Stage 6 before it: a review run publishes its decision on GitHub and reconciles its threads by finding
+key; a maintenance run tracks its findings as issues by the same key, pushes what it verified and
+proposes it as a change request; a scheduled run holds itself back as described above, remembers which
+checks keep failing, and refuses to be woken by its own comment. Under that sit the decision path, the
+tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets; every analyst capability
+the library defines can run, and a run can be narrowed with `--only` (for example
 `deps-vuln@python-uv`). What is still ahead is the eval harness — the way to choose a model per role on
 evidence rather than taste. `backend: fake` remains available for CI that must exercise the pipeline
 without a model.

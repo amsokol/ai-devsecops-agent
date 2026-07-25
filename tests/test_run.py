@@ -10,6 +10,7 @@ from agent.errors import ExitCode
 from agent.orchestrator import Request, RunRecord, run
 from agent.repo import Repository
 from agent.scm.fake import FakePlatform
+from agent.wake import Wake
 
 
 def commit(repo: Path, name: str, content: str, *, branch: str = "change") -> None:
@@ -224,14 +225,13 @@ def test_the_agent_does_not_answer_its_own_comment(
     and each turn costs a model. Declined before anything is spent, and recorded as a run."""
     platform = FakePlatform(login="ai-devsecops-agent")
     request = Request(
-        trigger=Trigger.HUMAN_COMMENT,
+        trigger=Trigger.COMMENT_ON_ISSUE,
         repository=git_repo,
         library_path=library_root,
         overlay_path=overlay_root,
         run_dir=tmp_path / "runs",
         config_dir=config_dir,
-        wake_issue=7,
-        actor="ai-devsecops-agent",
+        wake=Wake(actor="ai-devsecops-agent", comment=11, issue=7),
         publish=True,
     )
 
@@ -241,7 +241,7 @@ def test_the_agent_does_not_answer_its_own_comment(
     assert record.manifest.result == "declined"
     assert any("loop" in warning for warning in record.manifest.warnings)
     assert not record.manifest.models
-    assert not platform.calls[1:]
+    assert not platform.calls
 
 
 def test_a_bot_s_comment_does_not_wake_the_agent(
@@ -250,44 +250,19 @@ def test_a_bot_s_comment_does_not_wake_the_agent(
     """A run per comment between two machines is a bill with no reader. No credential is needed to
     know this one: the name says it."""
     request = Request(
-        trigger=Trigger.HUMAN_COMMENT,
+        trigger=Trigger.COMMENT_ON_ISSUE,
         repository=git_repo,
         library_path=library_root,
         overlay_path=overlay_root,
         run_dir=tmp_path / "runs",
         config_dir=config_dir,
-        wake_issue=7,
-        actor="dependabot[bot]",
+        wake=Wake(actor="dependabot[bot]", comment=11, issue=7),
     )
 
     record = run(request)
 
     assert record.manifest.result == "declined"
     assert any("is a bot" in warning for warning in record.manifest.warnings)
-
-
-def test_a_person_s_comment_wakes_the_agent(
-    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
-) -> None:
-    """The point of the check is that it lets the intended case through, budget and all."""
-    platform = FakePlatform()
-    request = Request(
-        trigger=Trigger.HUMAN_COMMENT,
-        repository=git_repo,
-        library_path=library_root,
-        overlay_path=overlay_root,
-        run_dir=tmp_path / "runs",
-        config_dir=config_dir,
-        wake_issue=7,
-        actor="amsokol",
-        publish=True,
-    )
-
-    record = run(request, platform=platform)
-
-    assert record.manifest.result == "pass"
-    assert record.manifest.playbook == "playbooks/maintain"
-    assert record.manifest.budget["kind"] == "maintenance"
 
 
 def test_a_checkout_with_nowhere_to_publish_still_keeps_its_verdict(

@@ -27,7 +27,9 @@ from agent.errors import ConfigError
 from agent.repo import Repository
 from agent.scm import marker
 from agent.scm.port import (
+    Authority,
     Change,
+    Comment,
     Identity,
     Issue,
     NewChange,
@@ -197,6 +199,24 @@ class GitHub:
         )
         return Identity(login=ACTIONS_IDENTITY if workflow else "", bot=True)
 
+    def authority(self, login: str) -> Authority:
+        """Whether this account may write here, asked of the platform rather than inferred.
+
+        The association GitHub attaches to a comment — owner, member, contributor — is not this
+        question: an organisation member is not necessarily allowed to write to this repository, and
+        a run that treated the two as the same would take orders from the wrong people. The
+        permission endpoint answers it directly, and needs push access itself, so a refusal is
+        reported as "could not establish" rather than as "no".
+        """
+        if not login:
+            return Authority(login=login, writes=False, known=False)
+        try:
+            got = self._api(f"repos/{self.slug}/collaborators/{login}/permission")
+        except ScmError:
+            return Authority(login=login, writes=False, known=False)
+        level = str(got.get("permission") or "")
+        return Authority(login=login, writes=level in {"admin", "write", "maintain"})
+
     def change(self, number: int) -> Change:
         got = self._api(f"repos/{self.slug}/pulls/{number}")
         head = got.get("head") or {}
@@ -248,6 +268,43 @@ class GitHub:
             if not info.get("hasNextPage"):
                 return tuple(found)
             cursor = str(info.get("endCursor"))
+
+    def change_comment(self, number: int, comment: int) -> Comment:
+        """One comment on a change's diff, checked to be on the change the run was told about.
+
+        The number and the comment identifier arrive from the same event, so they normally agree.
+        Checking anyway costs one string comparison and closes the gap where they do not: a
+        workflow that passes a trusted author together with a comment from somewhere else would
+        otherwise have the run answer in a conversation nobody woke it in.
+        """
+        got = self._api(f"repos/{self.slug}/pulls/comments/{comment}")
+        belongs = str(got.get("pull_request_url") or "")
+        if belongs and not belongs.endswith(f"/pulls/{number}"):
+            raise ScmError(f"comment {comment} is not on change {number} but on {belongs}")
+        return _comment(got)
+
+    def issue_at(self, number: int) -> Issue | None:
+        got = self._api(f"repos/{self.slug}/issues/{number}")
+        if "pull_request" in got:
+            raise ScmError(f"issue {number} is a change request, not an issue")
+        body = str(got.get("body") or "")
+        key = marker.read(body)
+        if not key:
+            return None
+        return Issue(
+            number=number,
+            key=key,
+            title=str(got.get("title") or ""),
+            body=body,
+            reference=str(got.get("html_url") or ""),
+        )
+
+    def issue_comment(self, issue: int, comment: int) -> Comment:
+        got = self._api(f"repos/{self.slug}/issues/comments/{comment}")
+        belongs = str(got.get("issue_url") or "")
+        if belongs and not belongs.endswith(f"/issues/{issue}"):
+            raise ScmError(f"comment {comment} is not on issue {issue} but on {belongs}")
+        return _comment(got)
 
     def review(
         self, number: int, *, body: str, stance: Stance, head: str, threads: Sequence[NewThread]
@@ -539,6 +596,20 @@ class GitHub:
         credential the run resolved is the credential the call uses, on a laptop and in CI alike.
         """
         return dict(os.environ) | {"GH_TOKEN": self.credential.token}
+
+
+def _comment(got: dict[str, Any]) -> Comment:
+    user = got.get("user") or {}
+    login = str(user.get("login", "")) if isinstance(user, dict) else ""
+    kind = str(user.get("type", "")) if isinstance(user, dict) else ""
+    return Comment(
+        id=int(got.get("id", 0)),
+        author=login,
+        bot=kind == "Bot" or login.endswith("[bot]"),
+        body=str(got.get("body") or ""),
+        parent=int(got.get("in_reply_to_id") or 0),
+        reference=str(got.get("html_url") or ""),
+    )
 
 
 def _complaint(finished: subprocess.CompletedProcess[str]) -> str:
