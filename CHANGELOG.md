@@ -107,9 +107,10 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   publishing never went through the ceiling. `hub.docker.com`, `registry-1.docker.io`, `auth.docker.io`
   and `ghcr.io` are permitted, because the library now names them and a host nobody names is a host
   nobody grants — container image facts were unobtainable while the profile called them reproducible.
-- The pinned knowledge library is `0.4.4`: acquisition recipes no longer send a session to a command
+- The pinned knowledge library is `0.4.5`: acquisition recipes no longer send a session to a command
   that has to log in, an action's publish date comes from the platform API with the tag-without-a-release
-  case covered, and the image registry hosts are named rather than described.
+  case covered, the image registry hosts are named rather than described, and the contract says what an
+  absent target means — a pin with nowhere to move is reported, not fixed.
 - A finding about a package that names no version to move to is reported and not queued for a fix.
   Quarantine produces one every week: the newest release is real, it is worth reporting, and there is
   nothing to move to until the clock runs out. The first live maintenance run queued one anyway, and
