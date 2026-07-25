@@ -16,6 +16,7 @@ from agent.backends.port import Brief, Budget, Failure, SessionResult
 from agent.backends.select import Roster
 from agent.brief import compose, digest, knowledge_for, role_instructions
 from agent.budget import Ledger, RunBudget
+from agent.containment import Checkout, Stray, refusal
 from agent.domain import Outcome, Plan, PlannedTask, Reason
 from agent.evidence import EvidenceStore
 from agent.findings import Finding
@@ -38,6 +39,8 @@ class Attempt:
     rejected: str = ""
     salvaged: str = ""
     """Where the result was actually found, when it was not where the prompt asked for it."""
+    strayed: tuple[Stray, ...] = ()
+    """Writes this attempt made into the repository's checkout, which were undone after it."""
 
     def as_json(self) -> dict[str, object]:
         return self.session.as_json() | {
@@ -46,6 +49,7 @@ class Attempt:
             "result_path": str(self.result_path),
             "rejected": self.rejected,
             "salvaged": self.salvaged,
+            "strayed": [stray.as_json() for stray in self.strayed],
         }
 
 
@@ -77,6 +81,7 @@ async def execute(
     toolkits: Toolkits,
     run_budget: RunBudget | None = None,
     ledger: Ledger | None = None,
+    checkout: Checkout | None = None,
 ) -> list[Executed]:
     """Run the planned tasks concurrently, up to the run budget's parallelism.
 
@@ -108,6 +113,7 @@ async def execute(
                 tasks_dir=tasks_dir,
                 budget=budget,
                 toolkits=toolkits,
+                checkout=checkout,
             )
             for attempt in executed.attempts:
                 await accounting.record(attempt.session.usage)
@@ -127,6 +133,7 @@ async def _execute_one(
     tasks_dir: Path,
     budget: Budget,
     toolkits: Toolkits,
+    checkout: Checkout | None = None,
 ) -> Executed:
     instructions = role_instructions(task.role)
     knowledge = knowledge_for(library, task)
@@ -148,6 +155,7 @@ async def _execute_one(
             budget=budget,
             toolkit=toolkit,
             rejection=rejection,
+            checkout=checkout,
         )
     finally:
         # Recorded whatever happened, including for a task that failed: how a fact was obtained is
@@ -193,6 +201,7 @@ async def run_attempts[T](
     toolkit: Toolkit,
     prompt_for: Callable[[int, str, Path], str],
     parse: Callable[[Path], T],
+    checkout: Checkout | None = None,
 ) -> Attempted[T]:
     """Run one task until it produces a valid result, or until the one retry is used up.
 
@@ -239,6 +248,17 @@ async def run_attempts[T](
                 continue
             return attempted
 
+        if checkout is not None:
+            attempt.strayed = await asyncio.to_thread(checkout.restore, keep=directory / "strayed")
+            if attempt.strayed:
+                # Not parsed, however good it looks. A session that edited the checkout believes it
+                # made a change, and the change is not there — reading its report would put a claim
+                # of a fix on a branch that has none.
+                attempt.rejected = rejection = attempted.rejected = refusal(attempt.strayed)
+                if number < MAX_ATTEMPTS:
+                    continue
+                return attempted
+
         written = _written(directory, result_path)
         if written != result_path:
             attempt.salvaged = str(written)
@@ -271,6 +291,7 @@ async def _attempts(
     budget: Budget,
     toolkit: Toolkit,
     rejection: str,
+    checkout: Checkout | None = None,
 ) -> Executed:
     def prompt_for(number: int, refused: str, result_path: Path) -> str:
         return compose(
@@ -298,6 +319,7 @@ async def _attempts(
             known_evidence=evidence.keys(),
             ecosystem=task.ecosystem,
         ),
+        checkout=checkout,
     )
     executed.attempts = attempted.attempts
     if attempted.parsed is not None:

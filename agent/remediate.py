@@ -23,6 +23,7 @@ from agent.backends.port import Budget, Failure
 from agent.backends.select import Roster
 from agent.brief import FIX_RESULT_SHAPE, compose, knowledge_for, role_instructions
 from agent.budget import Ledger
+from agent.containment import Checkout
 from agent.domain import FixOutcome, PlannedTask, Reason, Role
 from agent.errors import ConfigError
 from agent.evidence import Reliability
@@ -309,6 +310,7 @@ async def apply(
     toolkits: Toolkits,
     ledger: Ledger,
     run: str,
+    checkout: Checkout | None = None,
 ) -> list[Fix]:
     """Prepare each fix in its own worktree, then keep only the ones that verified.
 
@@ -359,6 +361,7 @@ async def apply(
                 budget=budget,
                 toolkits=toolkits,
                 ledger=ledger,
+                checkout=checkout,
             )
 
     await asyncio.gather(*(run_one(index, job, tree) for index, (job, tree) in enumerate(prepared)))
@@ -383,6 +386,7 @@ async def _one(
     budget: Budget,
     toolkits: Toolkits,
     ledger: Ledger,
+    checkout: Checkout | None = None,
 ) -> Fix:
     task = job.task
     toolkit = toolkits.for_task(task, step_limit=budget.steps, worktree=tree.path)
@@ -412,6 +416,7 @@ async def _one(
         toolkit=toolkit,
         prompt_for=prompt_for,
         parse=read_fix_result,
+        checkout=checkout,
     )
     for attempt in attempted.attempts:
         await ledger.record(attempt.session.usage)
