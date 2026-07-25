@@ -271,6 +271,13 @@ happens to be logged in as:
 | `AGENT_GITHUB_TOKEN` | the agent's own credential; first, so a laptop with a developer's token still publishes as the agent |
 | `GH_TOKEN`, `GITHUB_TOKEN` | the client's own precedence, so there is no second rule to learn; in Actions the workflow's `GITHUB_TOKEN` posts as `github-actions[bot]` |
 
+The same credential is what a run's reads of the platform's API carry, and the reason to set one even
+for a run that publishes nothing: anonymous access allows sixty requests an hour, which one ecosystem
+of one task can spend. It travels no further than that — attached inside the agent's own GET-only tool,
+to that platform's hosts alone, dropped on a redirect that changes host, and never placed in the
+environment a command is given, because a command may be running code that arrived in the change under
+review. Each run's record says whether the API was read as somebody or anonymously.
+
 With none of them set, nothing is published and the run says why. That refusal is deliberate: left to
 itself the client falls back to the stored login, and the first live check of this adapter published
 five machine-written reviews under a person's name. The name is the smaller half of the problem. A

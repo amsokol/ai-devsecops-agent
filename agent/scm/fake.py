@@ -49,6 +49,8 @@ class FakePlatform:
     nameless: bool = False
     """Report an integration without naming it, as an App's installation token does: it proves what
     the caller is and not which App, and the name only appears on what gets published."""
+    token: str = ""
+    """What `reading_token` answers: the credential a task's reads of the platform API may carry."""
     draft: bool = False
     fork: str = ""
     """When set, the head lives in that repository rather than this one, which is how a change from
@@ -81,6 +83,9 @@ class FakePlatform:
     @property
     def name(self) -> str:
         return "fake"
+
+    def reading_token(self) -> str:
+        return self.token
 
     def identity(self) -> Identity:
         self._check()

@@ -365,6 +365,11 @@ def run(
     # so it reads the cache and never feeds it.
     cache = FactCache(_cache_root(request, config), writable=request.trigger.is_maintenance)
     run_directory = request.run_dir / manifest.run_id
+    # Whether the platform's API was read anonymously belongs in the record: it decides which rate
+    # limit applied, and therefore whether a fact this run could not establish was unobtainable or
+    # merely the sixty-first request of the hour.
+    reading = speaker.reading_token() if speaker is not None else ""
+    manifest.grants |= {"platform_api": "authenticated" if reading else "anonymous"}
     session = Session(
         repository=repository.path,
         grants=grants,
@@ -372,6 +377,7 @@ def run(
         change=ChangeView.of(repository, base) if base is not None else None,
         scratch_root=run_directory / "scratch",
         never_send=config.never_send,
+        reading_token=reading,
     )
 
     owned = backend is None
@@ -880,14 +886,19 @@ def _resolve(
     So does any run that names a change, for one fact: which repository the head lives in. Nothing
     in a checkout says whether it came from a fork — the branch looks the same either way — and that
     answer decides whether this run may execute a single command.
+
+    Every other run resolves one too, for the credential its reads of the platform's API may carry:
+    anonymous access is rate-limited far below what a wide repository needs. Failing to resolve is
+    silent there — it costs a lower rate limit, not a capability — and becomes a warning only when
+    the run actually needed the platform for something.
     """
-    reads = request.publish or request.trigger.is_woken or request.change is not None
-    if platform is not None or not reads:
+    if platform is not None:
         return platform, ""
+    needed = request.publish or request.trigger.is_woken or request.change is not None
     try:
         return GitHub.of(repository), ""
     except ScmError as error:
-        return None, str(error)
+        return None, str(error) if needed else ""
 
 
 def _speaks_as(platform: Platform | None) -> Identity | None:

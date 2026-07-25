@@ -83,6 +83,34 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
 
 ### Changed
 
+- The result file is named to a session by absolute path, and a result written elsewhere inside the
+  session's own workspace is read where it landed rather than declared missing. The first live run on a
+  six-ecosystem repository finished an analysis, wrote the file one tree deeper — a relative path
+  resolved against the session's working directory, which is not the repository root — and paid for the
+  whole task twice. The record names the salvaged path, so a habit of writing elsewhere stays visible.
+- `fetch` can take one field from every member of a collection (`select: "*.tag_name"`), and a document
+  refused for its size now says how long it is and what a member holds. A list of releases is the shape
+  a version list arrives in from a hosting platform, and without a projection the only way to read tag
+  names was to ask for the array whole: a hundred kilobytes of release notes, refused, twice, because a
+  refusal that says only "too large" leaves nothing to narrow towards.
+
+- Reads of the hosting platform's API carry the agent's own credential, on that platform's hosts and
+  nowhere else. Anonymous access there allows sixty requests an hour, which one ecosystem of one task
+  exhausted on the first live run of a repository with six: the facts a quarantine decision needed went
+  missing, the findings resting on them disappeared, and the same repository came back blocked or
+  passing depending on what the previous hour had spent. Nothing else changes hands — no session sees
+  the token, no command's environment carries it, the tool is still GET-only and still confined to the
+  allowlist, and a redirect that changes host drops the header before following. The run record says
+  whether the API was read as somebody or anonymously.
+- No hosting client in the ceiling, and the image registries in it. A task's commands get an
+  environment with no credentials, so `gh` could only ever fail while looking available; the agent's own
+  publishing never went through the ceiling. `hub.docker.com`, `registry-1.docker.io`, `auth.docker.io`
+  and `ghcr.io` are permitted, because the library now names them and a host nobody names is a host
+  nobody grants — container image facts were unobtainable while the profile called them reproducible.
+- The pinned knowledge library is `0.4.4`: acquisition recipes no longer send a session to a command
+  that has to log in, an action's publish date comes from the platform API with the tag-without-a-release
+  case covered, and the image registry hosts are named rather than described.
+
 - A status note on a woken issue now reports what the run actually did. It asked whether the owning
   check finished `clean`, which is the rule for *closing* an issue, so a recheck that found the
   finding still present always answered "the check did not finish" — and never mentioned the fix it

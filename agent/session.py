@@ -36,6 +36,7 @@ class Session:
         scratch_root: Path,
         never_send: tuple[str, ...] = (),
         change: ChangeView | None = None,
+        reading_token: str = "",
     ) -> None:
         self.repository = repository
         self.grants = grants
@@ -45,6 +46,10 @@ class Session:
         self.evidence = EvidenceStore()
         self._never_send = never_send
         self._scratch_root = scratch_root
+        self._reading_token = reading_token
+        """The hosting platform's read credential, for the HTTP tool. Never for a command: the
+        environment those get is built without it, because a command may be running code from the
+        change under review."""
 
     def for_task(self, task_id: str, *, root: Path | None = None) -> TaskTools:
         """The tools for one task, reading and writing inside `root`.
@@ -59,7 +64,7 @@ class Session:
         return TaskTools(
             files=FileTools(root=tree, never_send=self._never_send),
             commands=CommandRunner(grants=self.grants, workdir=tree, scratch=scratch),
-            http=HttpClient(grants=self.grants),
+            http=HttpClient(grants=self.grants, token=self._reading_token),
             scratch=scratch,
         )
 

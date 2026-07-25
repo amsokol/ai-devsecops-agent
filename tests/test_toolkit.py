@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from agent.session import Session
 from agent.storage import FactCache
 from agent.toolkit import Refused, Toolkit
 from agent.tools import Grants
+from agent.tools.network import HttpClient, Response
 
 MOMENT = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
 TASK = PlannedTask(
@@ -113,6 +115,66 @@ def test_a_command_is_not_a_shell_expression(tmp_path: Path) -> None:
 def test_a_host_outside_the_allowlist_is_refused(tmp_path: Path) -> None:
     with pytest.raises(Refused, match="not permitted"):
         toolkit(tmp_path).call("fetch", {"url": "https://evil.example/httpx"})
+
+
+def answering(monkeypatch: pytest.MonkeyPatch, body: Any) -> None:
+    """Every fetch in the test answers with this document, as pypi.org would."""
+    rendered = body if isinstance(body, str) else json.dumps(body)
+
+    def get(_self: HttpClient, url: str) -> Response:
+        return Response(url=url, status=200, headers={}, body=rendered, truncated=False)
+
+    monkeypatch.setattr(HttpClient, "get", get)
+
+
+def test_one_field_of_every_member_is_selectable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answering(
+        monkeypatch,
+        [{"tag_name": "v2.9.1", "body": "x" * 100}, {"tag_name": "v2.9.0", "body": "y" * 100}],
+    )
+
+    answer = toolkit(tmp_path).call(
+        "fetch", {"url": "https://pypi.org/releases", "select": "*.tag_name"}
+    )
+
+    assert answer["json"] == ["v2.9.1", "v2.9.0"]
+
+
+def test_a_member_without_the_field_is_left_out_rather_than_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answering(monkeypatch, {"a": {"version": "1"}, "b": {}, "c": {"version": "3"}})
+
+    answer = toolkit(tmp_path).call(
+        "fetch", {"url": "https://pypi.org/index", "select": "*.version"}
+    )
+
+    assert answer["json"] == ["1", "3"]
+
+
+def test_a_refused_array_says_how_long_it_is_and_what_a_member_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answering(monkeypatch, [{"tag_name": f"v{index}", "body": "x" * 5_000} for index in range(20)])
+
+    answer = toolkit(tmp_path).call("fetch", {"url": "https://pypi.org/releases"})
+
+    assert "not_delivered" in answer
+    assert answer["length"] == 20
+    assert answer["member_keys"] == ["body", "tag_name"]
+
+
+def test_selecting_across_something_that_is_not_a_collection_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answering(monkeypatch, {"version": "1.0"})
+
+    with pytest.raises(Refused, match="needs a list or an object"):
+        toolkit(tmp_path).call(
+            "fetch", {"url": "https://pypi.org/httpx", "select": "version.*.date"}
+        )
 
 
 def test_a_fact_must_come_from_a_call(tmp_path: Path) -> None:

@@ -75,8 +75,10 @@ class Manifest:
     started_at: str
     tasks: list[TaskRecord] = field(default_factory=list)
     skipped: list[dict[str, str]] = field(default_factory=list)
-    grants: dict[str, list[str]] = field(default_factory=dict)
-    """Binaries and hosts this run was permitted to use, so a `not-permitted` gap is explainable."""
+    grants: dict[str, Any] = field(default_factory=dict)
+    """Binaries and hosts this run was permitted to use, so a `not-permitted` gap is explainable,
+    and whether it read the hosting platform's API as somebody or anonymously, which decides the
+    rate limit a missing fact may have run into."""
     posture: dict[str, Any] = field(default_factory=dict)
     """Whose code this run read, and therefore whether it was allowed to execute any of it. Recorded
     for every run: "the agent ran nothing over that fork" is a property somebody will want to check
