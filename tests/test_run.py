@@ -5,7 +5,11 @@ import subprocess
 from pathlib import Path
 
 from agent.cli import main
+from agent.domain import Trigger
 from agent.errors import ExitCode
+from agent.orchestrator import Request, run
+from agent.repo import Repository
+from agent.scm.fake import FakePlatform
 
 
 def commit(repo: Path, name: str, content: str) -> None:
@@ -125,6 +129,70 @@ def test_a_maintenance_run_carries_a_fix_phase_even_when_there_is_nothing_to_fix
     assert [role["role"] for role in manifest["roles"]] == ["analyst", "fixer"]
     assert manifest["remediation"] == {"jobs": [], "deferred": []}
     assert manifest["fixes"] == []
+
+
+def test_a_review_asked_to_publish_without_a_change_number_stops_before_it_starts(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """There is no conversation to publish to. Found at startup, before the run is paid for."""
+    code = main(
+        [
+            "review",
+            *arguments(git_repo, library_root, overlay_root, tmp_path / "runs", config_dir),
+            "--publish",
+        ]
+    )
+    assert code == int(ExitCode.CONFIG)
+
+
+def test_a_published_review_records_every_thread_it_touched(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """The run's own account of what it did on the platform, down to the stance of the review."""
+    commit(git_repo, "src/api.py", "value = 1\n")
+    repository = Repository.open(git_repo)
+    platform = FakePlatform(head=repository.head)
+    request = Request(
+        trigger=Trigger.CHANGE_OPENED,
+        repository=git_repo,
+        library_path=library_root,
+        overlay_path=overlay_root,
+        run_dir=tmp_path / "runs",
+        config_dir=config_dir,
+        base="main",
+        change=11,
+        publish=True,
+    )
+
+    record = run(request, platform=platform)
+
+    assert record.manifest.actions["published"] is True
+    assert record.manifest.actions["stance"] == "approve"
+    assert platform.reviews[0][1] == record.report
+    assert not any("published" in warning for warning in record.manifest.warnings)
+
+
+def test_a_platform_the_run_cannot_reach_is_a_warning_and_not_a_lost_verdict(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    commit(git_repo, "src/api.py", "value = 1\n")
+    platform = FakePlatform(fail="the token cannot see this repository")
+    request = Request(
+        trigger=Trigger.CHANGE_OPENED,
+        repository=git_repo,
+        library_path=library_root,
+        overlay_path=overlay_root,
+        run_dir=tmp_path / "runs",
+        config_dir=config_dir,
+        base="main",
+        change=11,
+        publish=True,
+    )
+
+    record = run(request, platform=platform)
+
+    assert record.exit_code == int(ExitCode.OK)
+    assert any("nothing was published" in warning for warning in record.manifest.warnings)
 
 
 def test_a_broken_overlay_stops_the_run_before_any_work(

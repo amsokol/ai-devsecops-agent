@@ -69,6 +69,14 @@ class Repository:
             return False
         return True
 
+    def remote(self, name: str = "origin") -> str:
+        """Where this checkout came from, which is the only honest answer to "which repository".
+
+        A hosting target named in configuration is one that will eventually disagree with the
+        checkout, and the failure mode is a review published on somebody else's pull request.
+        """
+        return _git(self.path, "remote", "get-url", name).strip()
+
 
 @dataclass(frozen=True, slots=True)
 class Worktree:

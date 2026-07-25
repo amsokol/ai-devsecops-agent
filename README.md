@@ -21,7 +21,7 @@ boundaries, and the implementation stages. The exchange contract between library
 
 ```bash
 uv sync
-uv run agent review  --repo . --change 12 --base main --library ./library
+uv run agent review  --repo . --change 12 --base main --library ./library [--publish]
 uv run agent maintain --repo . --library ./library [--scheduled]
 uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
@@ -137,14 +137,58 @@ on the unchanged head still stops the fix — a red branch is a branch nobody tr
 red — but the run reports the product's own checks as the cause and names them, so a week of refusals
 is not read as the agent being unable to bump a dependency.
 
+## Publishing a review
+
+A review run says nothing on the platform unless it is asked to: `--publish` with `--change`. Local
+runs report to the person who started them, and a pipeline that means to write in somebody's pull
+request says so in its own command line. Publishing needs `gh` on PATH and a credential it can read
+from the environment — usually `GH_TOKEN` — and the target repository comes from the checkout's own
+remote rather than from configuration, because a slug in a config file eventually disagrees with the
+checkout and then a review lands on the wrong repository.
+
+A run posts one review body — the same text as `report.md` — carrying the stance the result earns:
+`pass` approves, `blocked` requests changes, and `inconclusive` comments, because the check refuses
+the merge either way and "changes requested" is a claim about the code that a run without a result has
+not earned. Where GitHub refuses an approving review from a pull request's own author, the same text
+arrives as a comment; merge authority was never the approval event.
+
+Each finding with a line inside the diff also gets its own thread, and this is where the finding key
+earns its keep:
+
+| On a rerun | What happens |
+| --- | --- |
+| the finding is still there, unchanged | nothing at all — no second comment |
+| the finding is still there, reworded | its existing thread is edited in place |
+| the finding is gone and its capability finished `clean` | the thread is resolved, with a note saying why |
+| the finding is gone but its capability failed | the thread stays open: absence in a run that did not look is not a fix |
+| the comment has no marker | it belongs to a human and is never touched |
+
+The anchor is an HTML comment holding the finding key. Comment identifiers change when a thread is
+recreated and line numbers change whenever somebody edits the file above them; the key does not move.
+A finding whose line is outside the diff stays in the review body, because the platform rejects a
+comment there and, if it did not, the comment would blame whoever wrote that line years ago.
+
+What the platform records is what the run reports. GitHub allows nobody to review their own pull
+request, approving or requesting changes alike, so a run on a change the agent opened has its decision
+recorded as a comment — and `manifest.actions` says so, rather than claiming a stance the pull request
+does not show. `scripts/live_publish_check.py` drives all of this against a real scratch change, which
+is how that behaviour was found in the first place.
+
+Two things stop publishing outright: a draft change, and a head that moved while the run was working —
+comments derived from one commit and posted on another point at lines nobody proposed. A platform
+failure is a warning rather than an end. The analysis is the expensive part and it is already done, the
+exit code still carries the decision, and `manifest.actions` records every thread the run touched,
+including the ones it deliberately left alone.
+
 ## Status
 
-Stage 6, first slice: a maintenance run prepares verified fix branches locally. On top of the decision
-path, the tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets, every analyst
-capability the library defines can run, and a run can still be narrowed with `--only` (for example
-`deps-vuln@python-uv`). What is still ahead: the hosting platform — issues, pull requests and
-reconciliation — the restraints a scheduled run needs, and the eval harness. `backend: fake` remains
-available for CI that must exercise the pipeline without a model.
+Stage 6, second slice: a review run publishes its decision on GitHub and reconciles its threads by
+finding key. Before it, a maintenance run prepares verified fix branches locally, on top of the
+decision path, the tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets;
+every analyst capability the library defines can run, and a run can be narrowed with `--only` (for
+example `deps-vuln@python-uv`). What is still ahead: issues and fix pull requests for maintenance
+runs, the restraints a scheduled run needs, and the eval harness. `backend: fake` remains available
+for CI that must exercise the pipeline without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.

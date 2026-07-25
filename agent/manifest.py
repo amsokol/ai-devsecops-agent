@@ -90,6 +90,9 @@ class Manifest:
     fixes: list[dict[str, Any]] = field(default_factory=list)
     """What each fix task did, including the ones that refused: a branch that was not created is as
     much a part of the record as one that was."""
+    actions: dict[str, Any] = field(default_factory=dict)
+    """What was published on the hosting platform, thread by thread — including what was left alone,
+    because "the agent did not comment again" is the property idempotency claims."""
     remediation: dict[str, Any] = field(default_factory=dict)
     """The fix queue: what this run attempted, and what it left for the next one and why."""
     models: list[dict[str, Any]] = field(default_factory=list)
@@ -177,6 +180,7 @@ class Manifest:
             "roles": self.roles,
             "fixes": self.fixes,
             "remediation": self.remediation,
+            "actions": self.actions,
             "models": self.models,
             "tool_versions": self.tool_versions,
             "cost": self.cost,

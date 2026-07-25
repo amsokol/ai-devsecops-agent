@@ -38,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[Trigger.CHANGE_OPENED.value, Trigger.CHANGE_UPDATED.value],
         default=Trigger.CHANGE_OPENED.value,
     )
+    review.add_argument(
+        "--publish",
+        action="store_true",
+        help=(
+            "post the decision on the change: one review body, one thread per finding, and threads "
+            "of fixed findings resolved. Needs --change and a credential the client can read"
+        ),
+    )
 
     maintain = subcommands.add_parser("maintain", help="maintain the default branch")
     _add_common(maintain)
@@ -153,9 +161,27 @@ def _request(arguments: argparse.Namespace) -> Request:
         wake_issue=getattr(arguments, "wake_issue", None),
         plan_only=arguments.plan_only,
         dry_run=getattr(arguments, "dry_run", False),
+        publish=getattr(arguments, "publish", False),
         use_cache=not arguments.no_cache,
         only=tuple(arguments.only or ()),
     )
+
+
+def _print_actions(actions: dict[str, object]) -> None:
+    """What the run did on the platform, including the threads it deliberately left as they were.
+
+    "Unchanged" is worth a line: the whole promise of publishing by finding key is that a rerun does
+    not comment again, and a summary that only listed writes could not show it kept the promise.
+    """
+    if not actions:
+        return
+    posted = actions.get("posted")
+    if isinstance(posted, list):
+        for item in posted:
+            detail = f"  {item['detail']}" if item.get("detail") else ""
+            print(f"  {item['what']:<10} {item['key']}{detail}")
+    if actions.get("published"):
+        print(f"published {actions.get('stance')}  {actions.get('reference')}")
 
 
 def _print_summary(record: RunRecord) -> None:
@@ -178,6 +204,7 @@ def _print_summary(record: RunRecord) -> None:
         print(f"  {fix['outcome']:<10} {fix['finding']}\n             {where}")
     for entry in manifest.remediation.get("deferred", []):
         print(f"  deferred   {entry['finding']}\n             {entry['reason']}")
+    _print_actions(manifest.actions)
     if manifest.cost.get("known"):
         print(f"cost {manifest.cost['tokens']} tokens over {manifest.cost['sessions']} session(s)")
     print(f"result {manifest.result}  exit {int(record.exit_code)}")

@@ -26,14 +26,16 @@ from agent.manifest import Manifest
 from agent.overlay import Overlay
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
+from agent.publish import Publication, publish_review
 from agent.remediate import Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
+from agent.scm import GitHub, Platform, ScmError
 from agent.session import Session
 from agent.storage import FactCache
 from agent.toolkit import Toolkits
 from agent.tools import grant
-from agent.verdict import Verdict, decide, judge
+from agent.verdict import TaskOutcome, Verdict, decide, judge
 
 PLANNED = "planned"
 REPORT = "report.md"
@@ -53,6 +55,9 @@ class Request:
     plan_only: bool = False
     dry_run: bool = False
     """Analyse and say what would be fixed, without creating a worktree, a branch or a commit."""
+    publish: bool = False
+    """Post the decision on the hosting platform. Off by default, so a run on a laptop reports to
+    the person who started it, and a run in CI says out loud that it means to comment."""
     use_cache: bool = True
     only: tuple[str, ...] = ()
     """Task identifiers to run, for development. A run so narrowed says so in its manifest and in
@@ -86,7 +91,9 @@ def _narrow(plan: Plan, only: tuple[str, ...]) -> Plan:
     return replace(plan, tasks=kept, skipped=plan.skipped + dropped)
 
 
-def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
+def run(
+    request: Request, *, backend: Backend | None = None, platform: Platform | None = None
+) -> RunRecord:
     config = Config.load(request.config_dir)
     scenario = config.scenario_for(request.trigger)
 
@@ -102,6 +109,11 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
         default_limits=config.maintenance_limits,
         notes_limit=config.notes_limit,
     )
+
+    if request.publish and request.change is None:
+        raise ConfigError(
+            "--publish needs --change: there is no conversation to publish a review to without one"
+        )
 
     repository = Repository.open(request.repository)
     change: ChangeSet | None = None
@@ -259,6 +271,24 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
         fixes=tuple(fixes),
     )
 
+    if request.publish and request.change is not None:
+        # After the report, because the report is what gets published, and outside the event loop
+        # because talking to the platform is a subprocess away rather than a coroutine.
+        published = _announce(
+            request,
+            platform=platform,
+            repository=repository,
+            verdict=verdict,
+            report=report,
+            outcomes=tuple(item.outcome for item in executed),
+            change=session.change,
+        )
+        manifest.actions = published.as_json()
+        if published.failure:
+            manifest.warnings.append(f"nothing was published: {published.failure}")
+        elif published.withheld:
+            manifest.warnings.append(f"nothing was published: {published.withheld}")
+
     manifest.cache = cache.stats.as_json() | {"writable": cache.writable}
     manifest.finish(verdict.result.value)
     manifest_path = manifest.write(request.run_dir)
@@ -332,6 +362,39 @@ async def _perform(
     finally:
         if close:
             await roster.close()
+
+
+def _announce(
+    request: Request,
+    *,
+    platform: Platform | None,
+    repository: Repository,
+    verdict: Verdict,
+    report: str,
+    outcomes: tuple[TaskOutcome, ...],
+    change: ChangeView | None,
+) -> Publication:
+    """Publish the decision, and treat every way that can fail as a warning rather than an end.
+
+    The platform is resolved here rather than at startup so that a missing client or an unreadable
+    remote costs a warning on a run that still produced a verdict. Refusing to start would be the
+    stricter choice and the wrong one: the analysis is the expensive part, and it is already done.
+    """
+    assert request.change is not None  # noqa: S101 - guaranteed by the check in `run`
+    if platform is None:
+        try:
+            platform = GitHub.of(repository)
+        except ScmError as error:
+            return Publication(failure=str(error))
+    return publish_review(
+        platform,
+        number=request.change,
+        verdict=verdict,
+        report=report,
+        head=repository.head,
+        outcomes=outcomes,
+        change=change,
+    )
 
 
 def _conclude(
