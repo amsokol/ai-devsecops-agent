@@ -30,6 +30,10 @@ Read narrowly. Start from what the ecosystem document tells you to detect and fr
 scope, and prefer a targeted search to listing or reading the whole repository. Your calls are
 limited, and a wide scan spends them on files that cannot change the answer.
 
+When `read_change` is available, the run is reviewing a change and that change is your scope. Work
+from the lines it added. A whole file also shows you what was already there, and reporting that makes
+somebody wait for a line they did not write.
+
 When a fact cannot be obtained — no tooling exists, a host is unreachable, a page changed shape —
 report the outcome `unverified` with the reason. That is a useful, honest answer. Reporting `clean`
 when you could not check is the one outcome that is never acceptable: it converts a broken check into

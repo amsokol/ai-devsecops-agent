@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any
 
 from agent.domain import PlannedTask, Reason
+from agent.errors import ConfigError
 from agent.evidence import Evidence, Origin, Question, Subject
 from agent.session import Session, TaskTools
 from agent.tools import (
@@ -36,6 +37,16 @@ from agent.tools.dates import quarantine
 STATEABLE_REASONS = frozenset(
     {Reason.NO_TOOLING, Reason.UNAVAILABLE, Reason.UNEXPECTED_SHAPE, Reason.NOT_PERMITTED}
 )
+
+MODEL_PAYLOAD_CHARS = 60_000
+"""How much of a response a tool will hand to a model.
+
+Deliberately far below what the network layer will download. Parsing a document needs all of it;
+reading one does not, and a registry's aggregate index — every version of a popular package, with
+every file — costs more context than the whole review it was fetched for. Worse, when such a
+document exceeds the download limit it stops being valid JSON, so a fact taken from it is downgraded
+to heuristic for a reason that has nothing to do with how trustworthy the registry is.
+"""
 
 
 class Refused(Exception):
@@ -100,6 +111,29 @@ class Toolkit:
         return [call.as_json() for call in self._calls]
 
     def tools(self) -> tuple[Tool, ...]:
+        return self._always() + self._when_reviewing_a_change()
+
+    def _when_reviewing_a_change(self) -> tuple[Tool, ...]:
+        """Offered only when there is a change to compare against, so a repository-wide run cannot
+        be told to respect a scope that does not exist."""
+        if self._session.change is None:
+            return ()
+        return (
+            Tool(
+                name="read_change",
+                description=(
+                    "Ask git what this change did to one file: the lines it added and the lines it "
+                    "removed, with their numbers. This is what defines the review's scope — use it "
+                    "instead of deciding from a whole file what the change touched."
+                ),
+                schema=_schema(
+                    {"path": _string("path relative to the repository root")}, required=["path"]
+                ),
+                run=self._read_change,
+            ),
+        )
+
+    def _always(self) -> tuple[Tool, ...]:
         return (
             Tool(
                 name="list_files",
@@ -350,6 +384,19 @@ class Toolkit:
             "stderr": result.stderr,
         }
 
+    def _read_change(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        path = _required(arguments, "path")
+        change = self._session.change
+        if change is None:
+            raise Refused("this run has no change to compare against")
+        try:
+            answer = change.lines(path)
+        except ConfigError as error:
+            self._record_call("read_change", Origin.TOOL, path, ok=False, detail=str(error))
+            raise Refused(str(error)) from None
+        call = self._record_call("read_change", Origin.TOOL, change.source(answer.path), ok=True)
+        return {"call": call.id} | answer.as_json()
+
     def _fetch(self, arguments: dict[str, Any]) -> dict[str, Any]:
         url = _required(arguments, "url")
         try:
@@ -368,7 +415,15 @@ class Toolkit:
         # The distinction is mechanical, and that is the point: a page cannot be presented as an API
         # answer to earn the right to block.
         origin = Origin.API if parsed is not None else Origin.WEB
-        call = self._record_call("fetch", origin, response.url, ok=True)
+        body = parsed if parsed is not None else response.body
+        delivered, size = _deliverable(body)
+        call = self._record_call(
+            "fetch",
+            origin,
+            response.url,
+            ok=delivered is not None,
+            detail="" if delivered is not None else f"not delivered: {size} chars",
+        )
         payload: dict[str, Any] = {
             "call": call.id,
             "url": response.url,
@@ -376,10 +431,21 @@ class Toolkit:
             "kind": "api" if origin is Origin.API else "page",
             "truncated": response.truncated,
         }
-        if parsed is not None:
-            payload["json"] = parsed
+        if delivered is None:
+            # Downloading a large document is cheap; putting it in a context window is not, and a
+            # document nobody read cannot support a fact. Both problems have the same answer: ask a
+            # narrower question.
+            payload["not_delivered"] = (
+                f"the response is {size} chars, over the {MODEL_PAYLOAD_CHARS} this tool returns. "
+                "Request the narrower endpoint that answers only what you asked — for a single "
+                "version's metadata, that is usually the endpoint naming that version."
+            )
+            if isinstance(parsed, dict):
+                payload["keys"] = sorted(str(key) for key in parsed)[:40]
+        elif parsed is not None:
+            payload["json"] = delivered
         else:
-            payload["text"] = response.body
+            payload["text"] = delivered
         return payload
 
     # Arithmetic ------------------------------------------------------------------
@@ -434,7 +500,7 @@ class Toolkit:
     def _record_fact(self, arguments: dict[str, Any]) -> dict[str, Any]:
         question = _question(arguments)
         subject = self._subject(arguments.get("subject"))
-        cited = self._cited(arguments.get("calls"))
+        cited = self._cited(arguments.get("calls"), succeeded=True)
         if "value" not in arguments or arguments["value"] is None:
             raise Refused("a fact needs a value; if there is nothing to record, use record_gap")
         record = Evidence.verified(
@@ -517,7 +583,9 @@ class Toolkit:
             )
         return subject
 
-    def _cited(self, raw: Any, *, required: bool = True) -> tuple[Call, ...]:
+    def _cited(
+        self, raw: Any, *, required: bool = True, succeeded: bool = False
+    ) -> tuple[Call, ...]:
         if raw is None:
             raw = []
         if not isinstance(raw, list):
@@ -534,6 +602,14 @@ class Toolkit:
             raise Refused(
                 "a fact needs at least one call behind it. If nothing could be obtained, use "
                 "record_gap instead."
+            )
+        failed = [call.id for call in cited if succeeded and not call.ok]
+        if failed:
+            # A call that refused, failed or returned nothing establishes nothing. Citing it would
+            # dress a guess as a measurement, which is worse than admitting the gap.
+            raise Refused(
+                f"call(s) {', '.join(failed)} did not succeed, so a fact cannot rest on them. Use "
+                "record_gap to say the answer could not be established."
             )
         return cited
 
@@ -559,6 +635,14 @@ _QUESTION = {
         "same name in every run, which is what makes a fact reusable"
     ),
 }
+
+
+def _deliverable(body: Any) -> tuple[Any | None, int]:
+    """The body if it is small enough to hand over, and its size either way."""
+    rendered = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
+    if len(rendered) > MODEL_PAYLOAD_CHARS:
+        return None, len(rendered)
+    return body, len(rendered)
 
 
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:

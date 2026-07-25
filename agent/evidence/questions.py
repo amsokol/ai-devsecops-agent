@@ -30,6 +30,9 @@ class Question(StrEnum):
     REACHABILITY = "reachability"
     """Whether the affected code is actually used here, which decides how urgent an advisory is."""
 
+    CHANGED_LINES = "changed-lines"
+    """What the change itself added or removed in a file, which is what a review judges."""
+
     HOLD = "hold"
     """A stated reason not to move something, found in the repository rather than assumed."""
 

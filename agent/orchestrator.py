@@ -27,7 +27,7 @@ from agent.manifest import Manifest
 from agent.overlay import Overlay
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
-from agent.repo import Repository
+from agent.repo import ChangeView, Repository
 from agent.report import render
 from agent.session import Session
 from agent.storage import FactCache
@@ -192,6 +192,7 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
         repository=repository.path,
         grants=grants,
         cache=cache,
+        change=ChangeView.of(repository, base) if base is not None else None,
         scratch_root=run_directory / "scratch",
         never_send=config.never_send,
     )

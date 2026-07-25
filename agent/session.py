@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent.evidence import Evidence, EvidenceStore, Subject
+from agent.repo import ChangeView
 from agent.storage import FactCache
 from agent.tools import CommandRunner, FileTools, Grants, HttpClient
 
@@ -34,10 +35,13 @@ class Session:
         cache: FactCache,
         scratch_root: Path,
         never_send: tuple[str, ...] = (),
+        change: ChangeView | None = None,
     ) -> None:
         self.repository = repository
         self.grants = grants
         self.cache = cache
+        self.change = change
+        """The change under review, when there is one. Absent in a repository-wide run."""
         self.evidence = EvidenceStore()
         self._never_send = never_send
         self._scratch_root = scratch_root

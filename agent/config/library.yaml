@@ -7,5 +7,5 @@
 # The digest covers identity, index and document bodies, not the directory, so a checkout of the tag
 # and the unpacked release artefact verify the same. Take it with: agent pin --library <path>
 
-version: 0.1.3
-digest: sha256:be77d54eb710b7ab9a8e710ddc0463450cb04c89cfc30356e834ac058199bffa
+version: 0.1.4
+digest: sha256:413f5976422a4c5f9ca6013c90f698dad067556d1254b341f003426ebe3ebc0b
