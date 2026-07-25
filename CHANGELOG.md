@@ -110,6 +110,11 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
 - The pinned knowledge library is `0.4.4`: acquisition recipes no longer send a session to a command
   that has to log in, an action's publish date comes from the platform API with the tag-without-a-release
   case covered, and the image registry hosts are named rather than described.
+- A finding about a package that names no version to move to is reported and not queued for a fix.
+  Quarantine produces one every week: the newest release is real, it is worth reporting, and there is
+  nothing to move to until the clock runs out. The first live maintenance run queued one anyway, and
+  the session did what a session asked to fix an unfixable pin does — it invented a move, downgrading
+  an action by a major version that nobody had asked to downgrade and no evidence supported.
 - The repository's checkout is watched while sessions run, instead of the agent trusting a backend's
   sandbox to keep them out of it. A write that appears there is copied into the run record, undone, and
   the attempt refused. On the same live fix two sessions edited the checkout through the backend's own
