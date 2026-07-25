@@ -27,9 +27,13 @@ class FakePlatform:
     head: str = "head"
     author: str = "somebody"
     login: str = "devsecops-agent[bot]"
-    """A bot by default, because that is the only identity a run should publish under."""
+    """Who published things are shown as. A bot by default, because that is the only identity a run
+    should publish under."""
     is_bot: bool = True
     known_identity: bool = True
+    nameless: bool = False
+    """Report an integration without naming it, as an App's installation token does: it proves what
+    the caller is and not which App, and the name only appears on what gets published."""
     draft: bool = False
     refuse_own_review: bool = False
     """Behave like GitHub does on a change the credentials themselves opened: no review event at
@@ -47,7 +51,11 @@ class FakePlatform:
 
     def identity(self) -> Identity:
         self._check()
-        return Identity(login=self.login, bot=self.is_bot, known=self.known_identity)
+        return Identity(
+            login="" if self.nameless else self.login,
+            bot=self.is_bot,
+            known=self.known_identity,
+        )
 
     def change(self, number: int) -> Change:
         self._check()
@@ -76,7 +84,9 @@ class FakePlatform:
                 )
             )
             self.calls.append(Call("thread", key=item.key, detail=f"{item.path}:{item.line}"))
-        return Review(reference=f"fake://review/{len(self.reviews)}", stance=stance)
+        return Review(
+            reference=f"fake://review/{len(self.reviews)}", stance=stance, author=self.login
+        )
 
     def edit(self, thread: Thread, body: str) -> None:
         self._check()

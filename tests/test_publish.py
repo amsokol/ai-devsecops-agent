@@ -12,7 +12,7 @@ from agent.evidence import Reliability, Subject
 from agent.findings import Action, Finding, Klass, Location, Severity
 from agent.publish import Publication, publish_review
 from agent.repo import ChangeView, Repository
-from agent.scm import GitHub, ScmError, Stance, credential
+from agent.scm import GitHub, Identity, ScmError, Stance, credential
 from agent.scm.fake import FakePlatform
 from agent.scm.github import Credential
 from agent.scm.marker import read, stamp
@@ -344,11 +344,31 @@ def test_publishing_under_a_human_account_is_said_out_loud(platform: FakePlatfor
 def test_an_unreadable_identity_is_a_caution_rather_than_a_guess(platform: FakePlatform) -> None:
     platform.known_identity = False
     platform.login = ""
+    platform.is_bot = False
 
     record = publish(platform, verdict_of(result=RunResult.PASS))
 
     assert record.published
     assert "could not be read" in record.caution
+
+
+def test_an_app_learns_its_own_name_from_what_it_published(platform: FakePlatform) -> None:
+    """An installation token proves the caller is an integration without saying which one, so the
+    name comes back off the review rather than from asking the credential about itself."""
+    platform.login = "ai-devsecops-agent[bot]"
+    platform.nameless = True
+    assert platform.identity().login == ""
+
+    record = publish(platform, verdict_of(result=RunResult.PASS))
+
+    assert record.identity is not None
+    assert record.identity.login == "ai-devsecops-agent[bot]"
+    assert not record.caution
+
+
+def test_a_nameless_bot_is_described_rather_than_called_unreadable() -> None:
+    assert Identity(login="", bot=True).description == "an app installation"
+    assert Identity(login="", bot=False, known=False).description == "an unreadable account"
 
 
 def test_the_agent_s_token_is_read_from_its_own_variable_before_any_other() -> None:

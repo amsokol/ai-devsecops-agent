@@ -108,6 +108,14 @@ class Identity:
         """True when the platform will show this as a machine, so a bot filter can see it."""
         return self.known and self.bot
 
+    @property
+    def description(self) -> str:
+        """Readable even when the name is not known yet, which is the ordinary case for an App: its
+        credential proves it is an integration without saying which one."""
+        if self.login:
+            return self.login
+        return "an app installation" if self.trustworthy else "an unreadable account"
+
     def as_json(self) -> dict[str, Any]:
         return {"login": self.login, "bot": self.bot, "known": self.known}
 
@@ -122,9 +130,13 @@ class Review:
     event on a change the credentials opened, and then the decision arrives as a comment. A run that
     recorded its intention instead of the outcome would claim to have requested changes on a pull
     request that shows none."""
+    author: str = ""
+    """Who the platform says wrote it. The only source that cannot be wrong about the name — an
+    App's credential proves it is an integration but not which one, so the bot's own name is read
+    back off the first thing it published."""
 
     def as_json(self) -> dict[str, Any]:
-        return {"reference": self.reference, "stance": self.stance.value}
+        return {"reference": self.reference, "stance": self.stance.value, "author": self.author}
 
 
 @dataclass(frozen=True, slots=True)

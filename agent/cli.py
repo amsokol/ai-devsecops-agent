@@ -18,6 +18,7 @@ from agent.errors import AgentError, ExitCode
 from agent.library import Library
 from agent.manifest import read_manifest
 from agent.orchestrator import REPORT, Request, RunRecord, run
+from agent.scm.port import Identity
 
 DEFAULT_OVERLAY = ".devsecops"
 DEFAULT_RUN_DIR = ".agent/runs"
@@ -182,9 +183,7 @@ def _print_actions(actions: dict[str, object]) -> None:
             print(f"  {item['what']:<10} {item['key']}{detail}")
     if actions.get("published"):
         identity = actions.get("identity")
-        who = (
-            identity.get("login") or "an unreadable account" if isinstance(identity, dict) else "?"
-        )
+        who = Identity(**identity).description if isinstance(identity, dict) else "?"
         print(f"published {actions.get('stance')} as {who}  {actions.get('reference')}")
 
 

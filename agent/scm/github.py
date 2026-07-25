@@ -157,19 +157,28 @@ class GitHub:
     def identity(self) -> Identity:
         """Whose account this token speaks for, asked rather than assumed.
 
-        An installation token — the one a workflow gets by default — cannot read `/user` at all, and
-        that refusal is itself the answer: only a machine credential behaves that way, and inside
-        Actions its name is known. Anywhere else, an unanswerable question stays unanswered rather
-        than being filled in with a guess about who is about to comment.
+        An installation token — a workflow's default, and an App's — is refused by `/user` with
+        "resource not accessible by integration", and that refusal is the answer: only an
+        integration is told that, so the caller is a machine. Its name is another matter. A
+        workflow's own token is `github-actions[bot]` and can be named here; an App's bot is named
+        after the App, which this side cannot ask about, so the name is left for the platform to
+        state on the first thing published rather than guessed at now.
         """
         try:
             got = self._api("user")
-        except ScmError:
-            if os.environ.get("GITHUB_ACTIONS") == "true":
-                return Identity(login=ACTIONS_IDENTITY, bot=True)
-            return Identity(login="", bot=False, known=False)
+        except ScmError as refusal:
+            return self._integration(refusal)
         login = str(got.get("login", ""))
         return Identity(login=login, bot=got.get("type") == "Bot" or login.endswith("[bot]"))
+
+    def _integration(self, refusal: ScmError) -> Identity:
+        if "not accessible by integration" not in str(refusal).lower():
+            return Identity(login="", bot=False, known=False)
+        workflow = (
+            self.credential.variable == "GITHUB_TOKEN"
+            and os.environ.get("GITHUB_ACTIONS") == "true"
+        )
+        return Identity(login=ACTIONS_IDENTITY if workflow else "", bot=True)
 
     def change(self, number: int) -> Change:
         got = self._api(f"repos/{self.slug}/pulls/{number}")
@@ -256,7 +265,12 @@ class GitHub:
                 f"repos/{self.slug}/pulls/{number}/reviews", method="POST", body=payload
             )
             stance = Stance.COMMENT
-        return Review(reference=str(got.get("html_url") or got.get("id") or ""), stance=stance)
+        wrote = got.get("user")
+        return Review(
+            reference=str(got.get("html_url") or got.get("id") or ""),
+            stance=stance,
+            author=str(wrote.get("login", "")) if isinstance(wrote, dict) else "",
+        )
 
     def edit(self, thread: Thread, body: str) -> None:
         self._api(

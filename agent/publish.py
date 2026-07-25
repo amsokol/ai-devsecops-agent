@@ -19,7 +19,7 @@ working, its comments would point at lines nobody proposed, so the run says so a
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agent.domain import Outcome
@@ -184,6 +184,11 @@ def _publish(
     record.reference = review.reference
     record.stance = review.stance
     record.published = True
+    if review.author and record.identity is not None and review.author != record.identity.login:
+        # The name from the thing that was actually published, which beats the credential's own
+        # account of itself: an App's token proves it is an integration and never says which one.
+        record.identity = replace(record.identity, login=review.author)
+        record.caution = caution_for(record.identity)
     return record
 
 
