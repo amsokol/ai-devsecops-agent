@@ -29,7 +29,7 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.4.0` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.4.1` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
@@ -416,7 +416,9 @@ misread comment can do is answer instead of act, or re-establish a fact nobody a
 
 | Read as | What the run does |
 | --- | --- |
-| `question`, `fix` | replies in the conversation and changes nothing |
+| `question` | replies in the conversation and changes nothing |
+| `fix`, in a review thread | prepares the change and offers it there. Nothing is committed or pushed |
+| `fix`, on an issue | replies in prose: there is no diff to hang an offer on |
 | `unlock`, `recheck` | runs the check that owns that one finding, then reports as a maintenance run does |
 | `unrelated` | nothing at all, and writes nowhere: a machine that answers "thanks!" is a machine people mute |
 | anything, but unsure | replies. An unsure `unlock` is permission nobody gave |
@@ -436,10 +438,29 @@ Four things end the run before the first model call, each recorded as `declined`
 | the issue or thread carries no marker | a remark the agent never made is not one it can answer for, and there is no finding key in it |
 | the comment's author is not the actor the event named | something is passing one person's authority with another person's words, and the words are what would act |
 
-The reply itself is text and nothing else. No thread is resolved by it, no issue is closed by it, and
-the answering session gets no worktree, so it can read the repository and cannot change it. Everything
+An answer is text and nothing else. No thread is resolved by it, no issue is closed by it, and the
+answering session gets no worktree, so it can read the repository and cannot change it. Everything
 factual in the published comment — the run identifier, the finding key, the marker that makes later
 runs recognise it as the agent's own — comes from the agent; the session supplies only the explanation.
+
+"How do I fix this?" is the one case where a comment produces a change, and it is still only a comment.
+The edit is made by a fixing session in a throwaway copy of the repository at the head of the change,
+where the overlay's verification runs over it exactly as it would for a fix branch. What gets published
+is the session's paragraph about why the edit looks like this, then the diff **git** reports — never the
+session's account of it — then the label that verification earned:
+
+| Shape of the edit | How it arrives |
+| --- | --- |
+| replaces exactly the lines the remark hangs on | a `suggestion` block, applied with one click |
+| touches anything else, or more than one file | a diff to read and apply by hand |
+| longer than a comment can carry | the files it touches, named; half a diff looks like a whole one |
+| the session arrived at no change | its explanation of why, and no block at all |
+
+Nothing is committed, nothing is pushed, and the copy is discarded either way: the branch under review
+moves only if a person moves it. A patch that could not be shown safe is still offered — the question
+was how to fix it — with the label saying so, because whoever clicks "commit suggestion" is trusting
+that label. Preparing one needs `fixer` bound in the overlay's `review.models`; a product that binds
+none has decided its reviews explain rather than propose, and those questions are answered in prose.
 
 This is also why the caution about publishing under a human account matters: a workflow can filter
 `[bot]` authors, but it cannot tell a machine account from a colleague. Publish as a bot, and pass

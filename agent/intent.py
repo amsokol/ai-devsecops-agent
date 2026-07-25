@@ -40,6 +40,9 @@ class Course(StrEnum):
     ANSWER = "answer"
     """Reply in the conversation and change nothing. The safe course, and the default when the
     classification is unsure."""
+    PATCH = "patch"
+    """Try the change in a scratch checkout and offer it in the conversation. Writes nothing to the
+    repository: what is published is a comment, and applying it is the person's own act."""
     RECHECK = "recheck"
     """Run the check that owns this finding again, then report as a maintenance run does."""
     IGNORE = "ignore"
@@ -48,16 +51,18 @@ class Course(StrEnum):
 
 COURSE: dict[Intent, Course] = {
     Intent.QUESTION: Course.ANSWER,
-    Intent.FIX: Course.ANSWER,
+    Intent.FIX: Course.PATCH,
     Intent.RECHECK: Course.RECHECK,
     Intent.UNLOCK: Course.RECHECK,
     Intent.UNRELATED: Course.IGNORE,
 }
 """Intent to course, and every line of it is a decision rather than a mapping of names.
 
-`fix` answers in prose today. A person asking "how do I fix this?" gets the reasoning and the change
-they would make, which is most of what they asked for; handing them a patch they can commit is the
-next slice, and until it exists an answer beats a promise.
+`fix` prepares the change. A person asking "how do I fix this?" is asking for the edit, and prose
+describing an edit is the thing they would still have to write themselves — while a session that
+makes it in a scratch checkout can run the product's own verification over it first. Nothing is
+committed: what a `patch` course publishes is a comment, and the change in it is applied by the
+person or not at all.
 
 `unlock` rechecks. Nothing in the agent yet marks a finding as held awaiting a person, so there is
 no hold to release: what an unlock means today is "look at this finding now", which is what a
@@ -68,15 +73,23 @@ people mute.
 """
 
 
-def course_for(classification: Classification) -> Course:
+def course_for(classification: Classification, *, patching: bool) -> Course:
     """The course, with an unsure classification always answering.
 
     Not a judgement call: an unsure `unlock` is permission nobody gave, and an unsure `recheck`
     spends a run's budget on a guess. Answering leaves the person able to say what they meant.
+
+    `patching` is false where a patch is not a thing this run could offer — a comment on an issue,
+    with no diff to hang it on, or a product that bound no fixing model to its reviews. Then the
+    question is answered in prose, which is a worse answer than a change and a much better one than
+    a refusal to say anything.
     """
     if not classification.confident:
         return Course.ANSWER
-    return COURSE[classification.intent]
+    course = COURSE[classification.intent]
+    if course is Course.PATCH and not patching:
+        return Course.ANSWER
+    return course
 
 
 @dataclass(slots=True)
@@ -104,6 +117,7 @@ async def classify(
     budget: Budget,
     toolkits: Toolkits,
     ledger: Ledger,
+    patching: bool = False,
 ) -> Read:
     """Read the comment with the cheapest model the product bound, and record what it cost.
 
@@ -154,7 +168,7 @@ async def classify(
             read.detail = f"the classification ran out of budget ({read.detail})"
         return read
     read.classification = attempted.parsed
-    read.course = course_for(attempted.parsed)
+    read.course = course_for(attempted.parsed, patching=patching)
     return read
 
 

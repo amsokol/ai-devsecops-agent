@@ -141,6 +141,8 @@ class FakePlatform:
                     key=marker.read(item.body),
                     body=item.body,
                     number=number,
+                    path=item.path,
+                    line=item.line,
                 )
             )
             self.calls.append(Call("thread", key=item.key, detail=f"{item.path}:{item.line}"))

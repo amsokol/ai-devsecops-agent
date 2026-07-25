@@ -11,9 +11,14 @@ do it" is not what these tests are for; what the agent does once something has s
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
+import pytest
+import yaml
+from agent import patch
 from agent.backends.fake import FakeBackend, Scripted
+from agent.backends.port import Brief
 from agent.config import Config
 from agent.domain import Trigger
 from agent.errors import ExitCode
@@ -72,14 +77,27 @@ def on_issue(
     )
 
 
-def on_change(body: str, *, key: str = KEY, number: int = 4) -> FakePlatform:
-    """A platform holding one of the agent's review threads, with a reply in it."""
+def on_change(
+    body: str,
+    *,
+    key: str = KEY,
+    number: int = 4,
+    path: str = "",
+    line: int = 0,
+) -> FakePlatform:
+    """A platform holding one of the agent's review threads, with a reply in it.
+
+    `path` and `line` are where the thread hangs. They decide whether a prepared change can be
+    offered as a one-click suggestion, so the tests about that shape state them.
+    """
     thread = Thread(
         id="thread-1",
         comment="1",
         key=key,
         body=marker.stamp(REMARK, key) if key else REMARK,
         number=number,
+        path=path,
+        line=line,
     )
     return FakePlatform(
         opened=[thread],
@@ -507,6 +525,256 @@ def test_a_platform_that_will_not_take_the_reply_keeps_the_run(
     assert record.manifest.actions["answer"]["failure"]
     assert record.report is not None
     assert "Bump it to 3.1.4." in record.report
+
+
+SETTINGS = """\
+[project]
+name = "product"
+version = "0.1.0"
+dependencies = ["requests==2.31.0"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+"""
+PIN = 4
+"""Which line of that file the pin is on, which is where a thread about it would hang."""
+VERIFY = ("uv", "--version")
+"""A verification command that really runs and really passes, so "verified" means what it says."""
+
+
+def settled(repo: Path) -> None:
+    """Put a file worth editing in the repository, committed, so a patch shows up as a diff."""
+    (repo / "pyproject.toml").write_text(SETTINGS, encoding="utf-8")
+    env = {
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(repo.parent),
+    }
+    subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--quiet", "-m", "settings"], check=True, env=env
+    )
+
+
+def fixing(overlay_root: Path) -> Path:
+    """The same overlay with a fixing model bound to *reviews*, and a verification that passes.
+
+    Two separate decisions, and a product makes both. Without the binding a review can only explain;
+    without commands there is nothing a patch could be checked against, and it would be offered with
+    no label worth reading.
+    """
+    path = overlay_root / "agent.yaml"
+    values = yaml.safe_load(path.read_text(encoding="utf-8"))
+    values["review"]["models"]["fixer"] = "fake/composer-2.5"
+    values["verification"] = {"python-uv": [list(VERIFY)]}
+    path.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+    return overlay_root
+
+
+def patcher(
+    *,
+    edits: tuple[tuple[str, str, str], ...] = (("pyproject.toml", "2.31.0", "2.32.4"),),
+    verify: tuple[str, ...] | None = VERIFY,
+    outcome: str = "fixed",
+    notes: str = "Moving the pin to 2.32.4 drops the vulnerable range entirely.",
+) -> FakeBackend:
+    """A classifier that reads a comment as `fix`, and a fixing session that edits and verifies."""
+
+    def act(brief: Brief) -> None:
+        if brief.task.id != "wake-patch":
+            return
+        for path, find, replace in edits:
+            brief.toolkit.call("edit_file", {"path": path, "find": find, "replace": replace})
+        if verify is not None:
+            brief.toolkit.call("run_command", {"command": list(verify)})
+
+    return FakeBackend(
+        answers={
+            "wake-intent": Scripted(
+                result={"intent": "fix", "confident": True, "gist": "asks how to fix it"}
+            ),
+            "wake-patch": Scripted(result={"outcome": outcome, "notes": notes}),
+        },
+        on_execute=act,
+    )
+
+
+def branches(repo: Path) -> set[str]:
+    output = subprocess.run(
+        ["git", "-C", str(repo), "branch", "--format=%(refname:short)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {line.strip() for line in output.stdout.splitlines() if line.strip()}
+
+
+def test_a_question_about_fixing_is_answered_with_the_change_itself(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """The first scenario this whole mechanism exists for, end to end.
+
+    A person cannot see how to fix a remark and asks in the thread. What comes back is the edit,
+    tried in a scratch checkout with the product's own verification over it, offered as a block the
+    platform can apply — and nothing else. No branch, no commit, no push, no stance on the change.
+    """
+    settled(git_repo)
+    platform = on_change("how would I even fix this?", path="pyproject.toml", line=PIN)
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=patcher(),
+    )
+
+    assert record.exit_code == int(ExitCode.OK)
+    assert record.manifest.result == "answered"
+    assert record.manifest.wake["course"] == Course.PATCH.value
+    key, note = platform.replies[0]
+    assert key == KEY
+    # The paragraph is the session's, addressed to the person; the block under it is git's.
+    assert "drops the vulnerable range" in note
+    assert '```suggestion\ndependencies = ["requests==2.32.4"]\n```' in note
+    assert "passed in full" in note
+    assert "Nothing was committed and nothing was pushed" in note
+    assert marker.read(note) == KEY
+    # Nothing about the repository moved: not the tree under review, not a branch, not a worktree.
+    assert "2.31.0" in (git_repo / "pyproject.toml").read_text(encoding="utf-8")
+    assert branches(git_repo) == {"main"}
+    assert not platform.reviews and not platform.pushed
+    assert record.manifest.verdict == {}
+    prepared = record.manifest.actions["answer"]["prepared"]
+    assert prepared["form"] == "suggestion"
+    assert prepared["changed"] == ["pyproject.toml"]
+    assert prepared["verification"]["passed"] is True
+    # Two sessions: reading the comment, and making the change. No analysis was paid for.
+    assert len(only(record, "wake-intent")) == 1
+    assert len(only(record, "wake-patch")) == 1
+    assert record.manifest.cost["sessions"] == 2
+
+
+def test_a_patch_nobody_could_verify_is_still_offered_and_says_so(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """The question was how to fix it, so an unverified answer beats no answer — labelled.
+
+    The label is not a formality. A person clicking "commit suggestion" is trusting it, and it is
+    read off the commands the session actually ran rather than off what the session claimed.
+    """
+    settled(git_repo)
+    platform = on_change("how do I fix this?", path="pyproject.toml", line=PIN)
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=patcher(verify=None),
+    )
+
+    note = platform.replies[0][1]
+    assert "```suggestion" in note
+    assert "could not be shown safe" in note
+    assert "passed in full" not in note
+    assert record.manifest.actions["answer"]["prepared"]["verification"]["passed"] is False
+
+
+def test_a_change_that_touches_more_than_the_remark_arrives_as_a_diff(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """A suggestion replaces one range of one file and nothing else. Anything wider is a perfectly
+    good change and a wrong suggestion: the person would click apply and get a different edit."""
+    settled(git_repo)
+    platform = on_change("how do I fix this?", path="pyproject.toml", line=PIN)
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=patcher(
+            edits=(
+                ("pyproject.toml", "2.31.0", "2.32.4"),
+                ("README.md", "product", "product, patched"),
+            )
+        ),
+    )
+
+    note = platform.replies[0][1]
+    assert "```diff" in note
+    assert "```suggestion" not in note
+    assert record.manifest.actions["answer"]["prepared"]["form"] == "diff"
+    assert sorted(record.manifest.actions["answer"]["prepared"]["changed"]) == [
+        "README.md",
+        "pyproject.toml",
+    ]
+
+
+def test_a_change_somewhere_else_in_the_file_is_not_offered_as_a_suggestion(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """A suggestion is applied to the lines the thread hangs on, whatever the patch touched. When
+    those are not the same lines, the diff is shown instead of an offer that would edit the wrong
+    place."""
+    settled(git_repo)
+    platform = on_change("how do I fix this?", path="pyproject.toml", line=PIN + 5)
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=patcher(),
+    )
+
+    assert record.manifest.actions["answer"]["prepared"]["form"] == "diff"
+    assert "```suggestion" not in platform.replies[0][1]
+
+
+def test_a_change_too_long_to_read_is_described_rather_than_pasted(
+    git_repo: Path,
+    library_root: Path,
+    overlay_root: Path,
+    config_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A regenerated lock file is thousands of lines. Half of one looks like a whole one, so the
+    comment names the files and leaves the paragraph to say what the change does."""
+    settled(git_repo)
+    monkeypatch.setattr(patch, "MAX_DIFF_LINES", 1)
+    platform = on_change("how do I fix this?", path="pyproject.toml", line=PIN + 5)
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=patcher(),
+    )
+
+    note = platform.replies[0][1]
+    assert "too much to read in a comment" in note
+    assert "`pyproject.toml`" in note
+    assert "```diff" not in note
+    assert record.manifest.actions["answer"]["prepared"]["form"] == "described"
+
+
+def test_a_session_that_arrived_at_no_change_answers_in_prose(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """A refusal is an answer too: the person learns why the obvious fix is not one. What must not
+    happen is a reply that reads as an offer with nothing behind it."""
+    settled(git_repo)
+    platform = on_change("how do I fix this?", path="pyproject.toml", line=PIN)
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=patcher(
+            edits=(),
+            outcome="refused",
+            notes="Nothing here can move: 3.1.4 needs a Python this product does not run yet.",
+        ),
+    )
+
+    note = platform.replies[0][1]
+    assert "needs a Python this product does not run yet" in note
+    assert "```suggestion" not in note and "```diff" not in note
+    assert "did not arrive at one" in note
+    assert record.manifest.actions["answer"]["prepared"]["form"] == "none"
 
 
 def test_narrowing_keeps_only_the_check_that_owns_the_finding(
