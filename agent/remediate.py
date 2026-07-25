@@ -34,6 +34,7 @@ from agent.repo import Repository, Worktree
 from agent.results import FixResult, read_fix_result
 from agent.toolkit import Toolkits
 from agent.tools import NotPermitted
+from agent.unlock import Approval, waiting
 from agent.verdict import Judged
 from agent.verification import Surfaces, Verification, check
 
@@ -151,6 +152,7 @@ def plan_fixes(
     repository: Repository,
     max_open_fix_requests: int,
     proposed: tuple[str, ...] = (),
+    approvals: dict[str, Approval] | None = None,
 ) -> Queue:
     """Which findings this run will try to fix, in the order it will ship them.
 
@@ -162,7 +164,13 @@ def plan_fixes(
 
     Order is fixed rather than convenient: class `security` first, then by severity, then by key. A
     backlog of routine bumps can otherwise crowd out an advisory simply by being reported first.
+
+    `approvals` are the holds a person has already released, read from the issues before anything is
+    planned. A finding that waits for somebody and has no approval among them is deferred with the
+    reason, every run, until they answer — which is the whole of the guarantee that a major move
+    ships only when it was asked for.
     """
+    granted = approvals or {}
     if not overlay.verification:
         # Named per finding rather than once: the run's report is where a team learns that the
         # missing `verification` section is why nothing was fixed this week.
@@ -175,7 +183,7 @@ def plan_fixes(
                     "safe",
                 )
                 for item in _ordered(judged)
-                if _unfixable(item) is None
+                if _unfixable(item, granted) is None
             ),
         )
     jobs: list[FixJob] = []
@@ -185,7 +193,7 @@ def plan_fixes(
     # queue counts what is open rather than what this run adds: the limit is on a team's attention.
     open_now = {name for name in proposed if name.startswith(BRANCH_PREFIX)}
     room = max(0, max_open_fix_requests - len(open_now))
-    for group in _grouped(judged, deferred):
+    for group in _grouped(judged, deferred, granted):
         first, rest = group[0], group[1:]
         branch = branch_for(first)
         if branch in open_now:
@@ -216,12 +224,14 @@ def plan_fixes(
 
 
 def _grouped(
-    judged: tuple[Judged, ...], deferred: list[tuple[str, str]]
+    judged: tuple[Judged, ...],
+    deferred: list[tuple[str, str]],
+    approvals: dict[str, Approval],
 ) -> tuple[tuple[Judged, ...], ...]:
     """Fixable findings, one group per class and subject, in the order the run will ship them."""
     groups: dict[tuple[str, str], list[Judged]] = {}
     for item in _ordered(judged):
-        reason = _unfixable(item)
+        reason = _unfixable(item, approvals)
         if reason is not None:
             deferred.append((item.finding.key, reason))
             continue
@@ -246,17 +256,24 @@ def _ordered(judged: tuple[Judged, ...]) -> tuple[Judged, ...]:
     )
 
 
-def _unfixable(item: Judged) -> str | None:
+def _unfixable(item: Judged, approvals: dict[str, Approval]) -> str | None:
     """Why a finding is not a candidate for an automated fix.
 
     Reproducible evidence is required for the same reason it is required to block: acting on "looks
     like" is worse when the action is a change to shipping code than when it is a comment. A finding
     with no stated remedy has nothing to act on either — a fix task would be asked to invent one.
+
+    A hold is different from both, and its wording says so: nothing is wrong with the finding or its
+    evidence, and the run is not giving up on it. It is waiting for a person, and it will wait for
+    as many runs as that takes.
     """
     if item.reliability is not Reliability.REPRODUCIBLE:
         return "the evidence behind it is heuristic, so a code change would rest on a guess"
     if not item.finding.remediation:
         return "it states no remediation, so there is nothing to apply"
+    hold = waiting(item.finding, approvals)
+    if hold:
+        return f"{hold}. Nobody has, on its issue, so it waits"
     return None
 
 

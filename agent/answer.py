@@ -199,6 +199,8 @@ class Aftermath:
     """Where the prepared change can be reviewed."""
     problem: str = ""
     """Why there is no change to review, when there is none."""
+    approved: str = ""
+    """The approval this issue now carries, when somebody granted one."""
 
 
 def status_for(woken: Woken, aftermath: Aftermath, *, asked: str, run: str) -> str:
@@ -210,6 +212,14 @@ def status_for(woken: Woken, aftermath: Aftermath, *, asked: str, run: str) -> s
     like being ignored.
     """
     lines = [f"You asked for this: {asked}" if asked else "Picking this up.", ""]
+    if aftermath.approved:
+        # Said first, and said whatever else happened. It is the part a person can act on: the
+        # permission is recorded on this issue from now on, so a run that could not finish today is
+        # not a reason to come back and grant it again.
+        lines += [
+            f"{aftermath.approved} That is recorded on this issue, and no run will ask again.",
+            "",
+        ]
     if not aftermath.proven:
         lines.append(
             "The check that owns this finding did not finish, so nothing about it has been "
@@ -240,6 +250,12 @@ def status_for(woken: Woken, aftermath: Aftermath, *, asked: str, run: str) -> s
                 "No fix was prepared. "
                 + (aftermath.fix_detail or aftermath.problem or "The run's record says why."),
             ]
+            if aftermath.approved:
+                lines += [
+                    "",
+                    "The approval stands: the next run tries again from it, and there is nothing "
+                    "for you to do here unless you want to withdraw it.",
+                ]
     lines += [
         "",
         "---",

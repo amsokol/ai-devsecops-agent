@@ -29,10 +29,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.escalate import Escalation
-from agent.findings import Action
+from agent.findings import Action, Finding
 from agent.reconcile import Posted, unproven
 from agent.scm import marker
-from agent.scm.port import NewIssue, Platform, ScmError
+from agent.scm.port import Issue, NewIssue, Platform, ScmError
+from agent.unlock import Approval, held, read, render, stamped
 from agent.verdict import Judged, TaskOutcome, Verdict
 
 LABEL = "agent"
@@ -69,16 +70,33 @@ def track_findings(
     limit: int,
     escalations: tuple[Escalation, ...] = (),
     label: str = LABEL,
+    known: tuple[Issue, ...] | None = None,
+    approvals: dict[str, Approval] | None = None,
 ) -> Tracking:
     """Reconcile this run's findings with the issues already open, and record every step.
 
     A platform failure is recorded rather than raised, for the same reason a review's is: the
     analysis is already paid for, and losing its verdict because an issue could not be edited would
     make the run less reliable than the tracker it writes to.
+
+    `known` is the open set when the run already read it — a run that plans fixes has to, because
+    which holds a person released decides what it may ship. Listing it twice would ask the platform
+    the same question either side of the work and let the two answers differ.
     """
     record = Tracking()
     try:
-        return _track(platform, record, verdict, outcomes, head, limit, escalations, label)
+        return _track(
+            platform,
+            record,
+            verdict,
+            outcomes,
+            head,
+            limit,
+            escalations,
+            label,
+            known,
+            approvals or {},
+        )
     except ScmError as error:
         record.failure = str(error)
         return record
@@ -93,12 +111,19 @@ def _track(
     limit: int,
     escalations: tuple[Escalation, ...],
     label: str,
+    known: tuple[Issue, ...] | None,
+    approvals: dict[str, Approval],
 ) -> Tracking:
-    existing = {item.key: item for item in platform.issues(label=label) if item.key}
+    listed = platform.issues(label=label) if known is None else known
+    existing = {item.key: item for item in listed if item.key}
     # Findings and escalations are reconciled by one loop because they are the same kind of thing to
     # a reader: one issue, found again by its key, closed when the check that owns it says so.
-    wanted = {item.finding.key: (_title(item), _body(item)) for item in verdict.judged}
+    wanted = {
+        item.finding.key: (_title(item), _body(item, approvals.get(item.finding.key)))
+        for item in verdict.judged
+    }
     wanted |= {item.key: (item.title, item.body) for item in escalations}
+    _keep_approvals(platform, record, existing, approvals, rewritten=frozenset(wanted))
     # A broken check hides everything it would have found, so the news that it is broken does not
     # queue behind the findings of the checks that still work.
     exempt = {item.key for item in escalations}
@@ -140,6 +165,30 @@ def _track(
     return record
 
 
+def _keep_approvals(
+    platform: Platform,
+    record: Tracking,
+    existing: dict[str, Issue],
+    approvals: dict[str, Approval],
+    *,
+    rewritten: frozenset[str],
+) -> None:
+    """Write down an approval on an issue this run is not otherwise rewriting.
+
+    The ordinary path carries a fresh approval into the body along with everything else the finding
+    says. This is for the run where the check that owns it did not finish: the issue keeps its old
+    body and is left alone, and without this the grant would exist only in that run's record. The
+    next run would find no stamp and ask the person again for permission they already gave, which
+    the knowledge names as a defect in its own right.
+    """
+    for key, approval in sorted(approvals.items()):
+        issue = existing.get(key)
+        if issue is None or key in rewritten or read(issue.body) == approval:
+            continue
+        platform.edit_issue(issue, stamped(issue.body, approval))
+        record.posted.append(Posted("approved", key, approval.sentence))
+
+
 def _title(judged: Judged) -> str:
     """A title built from the parts that identify the problem and none that drift.
 
@@ -153,7 +202,7 @@ def _title(judged: Judged) -> str:
     return f"agent: {finding.capability.rsplit('/', 1)[-1]} — {what}"
 
 
-def _body(judged: Judged) -> str:
+def _body(judged: Judged, approval: Approval | None = None) -> str:
     """The finding, its evidence, and what to do about it — then the marker.
 
     Written to be read on its own, because an issue is found weeks later by somebody who never saw
@@ -170,6 +219,7 @@ def _body(judged: Judged) -> str:
     facts = [
         ("Capability", f"`{finding.capability}`"),
         ("Subject", _subject(judged)),
+        ("Moves to", finding.target),
         ("Advisory", finding.advisory),
         ("Where", _where(judged)),
         ("Evidence", judged.reliability.value),
@@ -181,7 +231,36 @@ def _body(judged: Judged) -> str:
             "This is reported rather than blocking: the evidence behind it is heuristic, and "
             "policy only lets demonstrated findings block.",
         ]
+    lines += _decision(finding, approval)
     return marker.stamp("\n".join(lines), finding.key)
+
+
+def _decision(finding: Finding, approval: Approval | None) -> list[str]:
+    """The one paragraph a person is here to act on, when the finding waits for them.
+
+    Both halves are written for somebody arriving at this issue cold: what is being asked, and what
+    saying yes will cause. An approval, once given, is stated in words and stamped in a comment the
+    agent reads on later runs, so the question is asked exactly once.
+    """
+    if approval is not None:
+        return [
+            "",
+            f"**{approval.sentence}** A run will prepare the change, verify it and open it for "
+            "review; this issue stays open until that is merged.",
+            "",
+            render(approval),
+        ]
+    hold = held(finding)
+    if not hold:
+        return []
+    return [
+        "",
+        f"**Waiting for a person.** This will not be changed automatically, because {hold}.",
+        "",
+        "Comment here to approve it — plain words, no phrase to match — and the next run prepares "
+        "the change, verifies it against this product's own commands and opens it for review. "
+        "Until then every run reports it and leaves the code alone.",
+    ]
 
 
 def _subject(judged: Judged) -> str:

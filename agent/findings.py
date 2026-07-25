@@ -79,6 +79,18 @@ class Finding:
     advisory: str = ""
     symbol: str = ""
     forbidden_state: bool = False
+    target: str = ""
+    """The version the remediation would move to, when the finding is a version move.
+
+    Deliberately absent from the key: it changes every time a newer release appears while the
+    problem stays the one problem. What it is for is arithmetic the agent does itself — how far a
+    move goes, which decides whether it may ship without asking anybody."""
+    needs_unlock: bool = False
+    """Declared by the task: this needs a person's approval before it may ship.
+
+    A declaration, not a decision. What it causes is in `agent/unlock.py`, and the agent adds the
+    same hold where it can prove one, so a task that forgets to declare a major move does not turn
+    policy off."""
 
     @property
     def key(self) -> str:
@@ -128,6 +140,8 @@ class Finding:
             "advisory": self.advisory,
             "symbol": self.symbol,
             "forbidden_state": self.forbidden_state,
+            "target": self.target,
+            "needs_unlock": self.needs_unlock,
         }
 
 
@@ -171,4 +185,8 @@ def _stricter(first: Finding, second: Finding) -> Finding:
         advisory=winner.advisory or first.advisory or second.advisory,
         symbol=winner.symbol or first.symbol or second.symbol,
         forbidden_state=first.forbidden_state or second.forbidden_state,
+        target=winner.target or first.target or second.target,
+        # Either task asking for a person is enough. One that saw a reason to hold saw something the
+        # other did not, and the cheap way to be wrong here is to ship a move nobody approved.
+        needs_unlock=first.needs_unlock or second.needs_unlock,
     )

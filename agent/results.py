@@ -42,6 +42,8 @@ _FINDING_KEYS = frozenset(
         "advisory",
         "symbol",
         "forbidden_state",
+        "target",
+        "needs_unlock",
     }
 )
 _SUBJECT_KEYS = frozenset({"ecosystem", "package", "version", "path"})
@@ -280,6 +282,8 @@ def _finding(
         advisory=str(raw.get("advisory") or "").strip(),
         symbol=str(raw.get("symbol") or "").strip(),
         forbidden_state=bool(raw.get("forbidden_state", False)),
+        target=str(raw.get("target") or "").strip(),
+        needs_unlock=bool(raw.get("needs_unlock", False)),
     )
 
 

@@ -69,8 +69,24 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   — because it was not asked, or would not answer — is treated as a fork, since a review that guesses
   in the permissive direction is one an attacker can arrange by breaking a single API call.
   `--outside` forces that posture and can only take permission away.
+- Findings that wait for a person, and approvals that release them. A major move is held from the
+  fix queue — reported, never changed — and its issue says what it waits for and what a comment there
+  will cause. The hold comes from two places that fail in opposite directions: the agent measures a
+  semantic-version major from the finding's `target` and holds it whatever the session said, and a
+  session declares the majors no comparison can see, such as a `@v5` to `@v7` action pin or a raised
+  toolchain floor. A declaration can only add a hold, never remove one, and a security remediation is
+  never held by the arithmetic. An approval is a comment from an account with write access, stamped
+  into the issue body so it is read without a model and asked for exactly once; the same run then
+  prepares, verifies, pushes and proposes the change, and says so on the issue. The stamp outlives a
+  fix that would not verify, because approval is for the move rather than for one attempt at it. A run
+  that cannot read its issues ships nothing that waits and says why.
 
 ### Changed
+
+- A status note on a woken issue now reports what the run actually did. It asked whether the owning
+  check finished `clean`, which is the rule for *closing* an issue, so a recheck that found the
+  finding still present always answered "the check did not finish" — and never mentioned the fix it
+  had just prepared and proposed.
 
 - `--wake-comment <id>` names the comment that woke a run and is required with `--actor`. A wake with
   no comment to read is a run guessing what it was asked. The `human-comment` trigger is now
@@ -95,10 +111,11 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
 - "How do I fix this?" on a fork gets a paragraph and a sentence saying why there is no change to
   click: one could not have been verified without running the fork's code, and an unverified edit is
   not worth offering.
-- The pinned knowledge library is `0.4.2`: it names the two roles a comment wakes, narrows a woken
+- The pinned knowledge library is `0.4.3`: it names the two roles a comment wakes, narrows a woken
   maintenance run to the finding it was written on, says that a fix task does not always end in a
   branch — its change may be offered to whoever asked how to fix it — records why the merge is held
   by a required check rather than by the platform's approval flow, and states what a review of a fork
   may and may not establish, including the workflow shapes that hand a fork's code the job's
-  credentials. It also corrects the tool names it promised, which until now sent sessions calling
-  tools this agent never had.
+  credentials. It also makes a hold a field on the finding rather than a rule to remember, says that
+  an unlock stays granted across a failed attempt, and corrects the tool names it promised, which
+  until now sent sessions calling tools this agent never had.
