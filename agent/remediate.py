@@ -40,6 +40,9 @@ from agent.verification import Surfaces, Verification, check
 VERIFICATION_POLICY = "policy/verification"
 """Named explicitly in a fix task's slice: deciding which surfaces to run is the whole judgement."""
 
+BRANCH_PREFIX = "agent/"
+"""Every branch the agent creates starts here, which is how a run recognises its own work."""
+
 
 @dataclass(frozen=True, slots=True)
 class FixJob:
@@ -136,7 +139,7 @@ def branch_for(judged: Judged) -> str:
     subject = finding.subject.key()
     readable = slug(finding.subject.package or finding.subject.path or finding.capability)
     tail = hashlib.sha256(f"{finding.klass.value}:{subject}".encode()).hexdigest()[:8]
-    return f"agent/{finding.klass.value}/{readable[:60].strip('-')}-{tail}"
+    return f"{BRANCH_PREFIX}{finding.klass.value}/{readable[:60].strip('-')}-{tail}"
 
 
 def plan_fixes(
@@ -147,6 +150,7 @@ def plan_fixes(
     playbook: str,
     repository: Repository,
     open_change_requests: int,
+    proposed: tuple[str, ...] = (),
 ) -> Queue:
     """Which findings this run will try to fix, in the order it will ship them.
 
@@ -176,20 +180,28 @@ def plan_fixes(
         )
     jobs: list[FixJob] = []
     deferred: list[tuple[str, str]] = []
+    # The subject's branch is stable, so a change request already carrying it is this same fix under
+    # review. Reopening it as a second one is the noise this whole phase exists to avoid, and the
+    # queue counts what is open rather than what this run adds: the limit is on a team's attention.
+    open_now = {name for name in proposed if name.startswith(BRANCH_PREFIX)}
+    room = max(0, open_change_requests - len(open_now))
     for group in _grouped(judged, deferred):
         first, rest = group[0], group[1:]
         branch = branch_for(first)
+        if branch in open_now:
+            _defer(deferred, group, f"branch {branch} is already under review")
+            continue
         if repository.has_branch(branch):
-            # Slice by slice: without knowing the hosting platform's state, the agent cannot tell an
-            # abandoned branch from one under review. Leaving it alone never destroys work.
+            # An abandoned branch from an earlier run in this same checkout. Leaving it alone never
+            # destroys work, and pushing over it would be a force-push by another name.
             _defer(deferred, group, f"branch {branch} already exists")
             continue
-        if len(jobs) >= open_change_requests:
+        if len(jobs) >= room:
             _defer(
                 deferred,
                 group,
-                f"the queue of {open_change_requests} open change request(s) is full; the next run "
-                "will take this one",
+                f"the queue allows {open_change_requests} open change request(s) and "
+                f"{len(open_now)} are open; the next run will take this one",
             )
             continue
         jobs.append(

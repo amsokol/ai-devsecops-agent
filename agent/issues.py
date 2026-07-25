@@ -41,6 +41,8 @@ class Tracking:
     raised: int = 0
     closed: int = 0
     failure: str = ""
+    numbers: dict[str, int] = field(default_factory=dict)
+    """Issue number per finding key, so a change request can name the issue it answers."""
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -48,6 +50,7 @@ class Tracking:
             "raised": self.raised,
             "closed": self.closed,
             "failure": self.failure,
+            "tracked": dict(sorted(self.numbers.items())),
         }
 
 
@@ -102,8 +105,10 @@ def _track(
                 NewIssue(key=key, title=_title(judged), body=body), label=label
             )
             record.raised += 1
+            record.numbers[key] = opened.number
             record.posted.append(Posted("raised", key, opened.reference))
             continue
+        record.numbers[key] = issue.number
         if issue.body.strip() != body.strip():
             platform.edit_issue(issue, body)
             record.posted.append(Posted("updated", key, "the finding changed"))

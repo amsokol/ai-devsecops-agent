@@ -147,7 +147,7 @@ def test_security_is_queued_first_and_the_queue_has_a_ceiling(
     )
     assert [job.judged.finding.subject.package for job in queue.jobs] == ["requests", "click"]
     assert (
-        "queue of 2 open change request(s) is full"
+        "the queue allows 2 open change request(s)"
         in dict(queue.deferred)[
             judged(klass=Klass.ROUTINE, severity=Severity.LOW, package="rich").finding.key
         ]
@@ -198,7 +198,45 @@ def test_a_full_queue_defers_a_whole_group(
     )
     assert len(queue.jobs) == 1
     assert len(queue.deferred) == 2
-    assert all("queue of 1 open change request(s)" in reason for _, reason in queue.deferred)
+    assert all(
+        "the queue allows 1 open change request(s)" in reason for _, reason in queue.deferred
+    )
+
+
+def test_a_subject_already_under_review_is_left_alone(
+    library: Library, overlay: Overlay, git_repo: Path
+) -> None:
+    """The branch name is stable per subject, so an open change request carrying it is this same
+    fix. Preparing it again would ask a reviewer to read one edit twice."""
+    first = judged()
+    queue = plan_fixes(
+        (first, judged(package="urllib3")),
+        library=library,
+        overlay=overlay,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        open_change_requests=5,
+        proposed=(branch_for(first),),
+    )
+    assert [job.judged.finding.subject.package for job in queue.jobs] == ["urllib3"]
+    assert "already under review" in dict(queue.deferred)[first.finding.key]
+
+
+def test_the_queue_counts_the_change_requests_already_open(
+    library: Library, overlay: Overlay, git_repo: Path
+) -> None:
+    """The limit is on a team's attention, so what is already waiting for them counts against it."""
+    queue = plan_fixes(
+        (judged(package="urllib3"),),
+        library=library,
+        overlay=overlay,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        open_change_requests=1,
+        proposed=(branch_for(judged()),),
+    )
+    assert not queue.jobs
+    assert "1 are open" in dict(queue.deferred)[judged(package="urllib3").finding.key]
 
 
 def test_without_verification_commands_nothing_can_be_fixed(

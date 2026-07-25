@@ -187,7 +187,7 @@ def _print_actions(actions: dict[str, Any]) -> None:
         return
     identity = actions.get("identity")
     who = Identity(**identity).description if isinstance(identity, dict) else "an unknown account"
-    for part in ("review", "issues"):
+    for part in ("review", "issues", "changes"):
         block = actions.get(part)
         if not isinstance(block, dict):
             continue
@@ -200,6 +200,9 @@ def _print_actions(actions: dict[str, Any]) -> None:
     tracked = actions.get("issues")
     if isinstance(tracked, dict):
         print(f"issues    {tracked['raised']} raised, {tracked['closed']} closed, as {who}")
+    opened = actions.get("changes")
+    if isinstance(opened, dict):
+        print(f"changes   {opened['opened']} proposed, as {who}")
 
 
 def _print_summary(record: RunRecord) -> None:

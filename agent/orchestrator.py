@@ -18,7 +18,7 @@ from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import Config
-from agent.domain import Plan, Role, Trigger
+from agent.domain import FixOutcome, Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
@@ -28,9 +28,10 @@ from agent.manifest import Manifest
 from agent.overlay import Overlay
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
+from agent.propose import propose_fixes
 from agent.publish import publish_review
 from agent.reconcile import caution_for
-from agent.remediate import Fix, Queue, apply, plan_fixes
+from agent.remediate import BRANCH_PREFIX, Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
 from agent.scm import GitHub, Platform, ScmError
@@ -242,6 +243,27 @@ def run(
     # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
     # fails with a future attached to another loop.
     ledger = Ledger(RunBudget(max_parallel=limits.max_parallel, tokens=limits.run_tokens))
+
+    # Resolved before the fix phase rather than after it: which branches are already under review
+    # decides which fixes are worth preparing at all, and a run that guesses opens a second change
+    # request carrying an edit somebody is already reviewing.
+    speaker, speaks = _resolve(request, platform=platform, repository=repository)
+    if speaks:
+        manifest.warnings.append(f"nothing was published: {speaks}")
+    proposed: tuple[str, ...] = ()
+    if may_fix and request.publish:
+        if speaker is None:
+            may_fix = False
+        else:
+            try:
+                proposed = tuple(item.head for item in speaker.proposals(prefix=BRANCH_PREFIX))
+            except ScmError as error:
+                may_fix = False
+                manifest.warnings.append(
+                    f"no fix branches were prepared: the open change requests could not be read "
+                    f"({error}), and preparing branches blind would duplicate ones already open"
+                )
+
     executed, verdict, fixes, queue = asyncio.run(
         _perform(
             plan,
@@ -257,6 +279,7 @@ def run(
             toolkits=toolkits,
             ledger=ledger,
             may_fix=may_fix,
+            proposed=proposed,
             close=owned,
         )
     )
@@ -274,20 +297,23 @@ def run(
         fixes=tuple(fixes),
     )
 
-    if request.publish:
+    if request.publish and speaker is not None:
         # After the report, because the report is what gets published, and outside the event loop
         # because talking to the platform is a subprocess away rather than a coroutine.
         _announce(
             request,
             manifest=manifest,
-            platform=platform,
+            platform=speaker,
             repository=repository,
             verdict=verdict,
             report=report,
             outcomes=tuple(item.outcome for item in executed),
             change=session.change,
+            fixes=tuple(fixes),
             new_issues=overlay.limits.new_issues_per_run,
         )
+    elif request.publish:
+        manifest.actions = {"failure": speaks}
 
     manifest.cache = cache.stats.as_json() | {"writable": cache.writable}
     manifest.finish(verdict.result.value)
@@ -312,6 +338,7 @@ async def _perform(
     toolkits: Toolkits,
     ledger: Ledger,
     may_fix: bool,
+    proposed: tuple[str, ...],
     close: bool,
 ) -> tuple[list[Executed], Verdict, list[Fix], Queue | None]:
     """Analyse, decide, and then — on a maintenance run — fix what the decision allows.
@@ -342,6 +369,7 @@ async def _perform(
             playbook=plan.playbook,
             repository=repository,
             open_change_requests=overlay.limits.open_change_requests,
+            proposed=proposed,
         )
         fixes = await apply(
             queue,
@@ -364,36 +392,45 @@ async def _perform(
             await roster.close()
 
 
+def _resolve(
+    request: Request, *, platform: Platform | None, repository: Repository
+) -> tuple[Platform | None, str]:
+    """The platform this run will speak to, or why it cannot speak at all.
+
+    A missing client, an unreadable remote or an absent credential costs a warning rather than the
+    run: by the time any of it matters the analysis is the expensive part, and it is already done.
+    """
+    if not request.publish or platform is not None:
+        return platform, ""
+    try:
+        return GitHub.of(repository), ""
+    except ScmError as error:
+        return None, str(error)
+
+
 def _announce(
     request: Request,
     *,
     manifest: Manifest,
-    platform: Platform | None,
+    platform: Platform,
     repository: Repository,
     verdict: Verdict,
     report: str,
     outcomes: tuple[TaskOutcome, ...],
     change: ChangeView | None,
+    fixes: tuple[Fix, ...],
     new_issues: int,
 ) -> None:
     """Write the decision where the trigger's audience is, and record who wrote it.
 
     A review run has a conversation to write in; a maintenance run has none, so its findings are
-    tracked as issues instead. Both are the same reconciliation by finding key, and both ask the
-    platform once who the credential speaks for — a decision published under a person's name is a
-    machine's judgement wearing it.
+    tracked as issues and its verified branches are proposed as change requests. Both paths are the
+    same reconciliation by finding key, and both ask the platform once who the credential speaks for
+    — a decision published under a person's name is a machine's judgement wearing it.
 
-    Every way this can fail is a warning rather than an end. The platform is resolved here rather
-    than at startup so that a missing client or an unreadable remote costs a warning on a run that
-    still produced a verdict: the analysis is the expensive part, and it is already done.
+    Issues are written before the change requests that link them, which is the only order in which a
+    change request can name the issue it answers.
     """
-    if platform is None:
-        try:
-            platform = GitHub.of(repository)
-        except ScmError as error:
-            manifest.actions = {"failure": str(error)}
-            manifest.warnings.append(f"nothing was published: {error}")
-            return
     try:
         identity = platform.identity()
     except ScmError as error:
@@ -414,6 +451,19 @@ def _announce(
         actions["issues"] = tracked.as_json()
         if tracked.failure:
             manifest.warnings.append(f"the tracked issues are incomplete: {tracked.failure}")
+        if any(fix.outcome is FixOutcome.FIXED for fix in fixes):
+            opened = propose_fixes(
+                platform,
+                fixes=fixes,
+                path=repository.path,
+                base=repository.branch,
+                issues=tracked.numbers,
+                run=manifest.run_id,
+            )
+            actions["changes"] = opened.as_json()
+            for item in opened.posted:
+                if item.what != "proposed":
+                    manifest.warnings.append(f"a verified fix was not proposed: {item.detail}")
     else:
         assert request.change is not None  # noqa: S101 - guaranteed by the check in `run`
         published = publish_review(

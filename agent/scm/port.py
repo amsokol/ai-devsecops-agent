@@ -1,9 +1,10 @@
 """What the agent needs from a hosting platform, and nothing else.
 
-The port is narrow on purpose. A run publishes a decision about a change, keeps one thread per
-finding alive across runs, and resolves a thread when the problem is demonstrably gone. Everything
-else a platform offers — projects, milestones, releases, merging — is either none of the agent's
-business or out of reach, and an interface naming it would invite a later slice to use it.
+The port is narrow on purpose. A run publishes a decision about a change, keeps one thread or issue
+per finding alive across runs, settles it when the problem is demonstrably gone, and proposes the
+branches it prepared. Everything else a platform offers — projects, milestones, releases, merging —
+is either none of the agent's business or out of reach, and an interface naming it would invite a
+later slice to use it.
 
 Nothing here is available to a model. Publishing runs after the decision is made, from the agent's
 own code, which is what makes a repeated run update a thread instead of opening a second one.
@@ -14,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol
 
 from agent.domain import RunResult
@@ -173,6 +175,28 @@ class NewIssue:
     body: str
 
 
+@dataclass(frozen=True, slots=True)
+class Proposal:
+    """One of the agent's own open change requests, found by the branch it carries."""
+
+    number: int
+    head: str
+    reference: str = ""
+
+    def as_json(self) -> dict[str, Any]:
+        return {"number": self.number, "head": self.head, "reference": self.reference}
+
+
+@dataclass(frozen=True, slots=True)
+class NewChange:
+    """A prepared branch to propose."""
+
+    head: str
+    base: str
+    title: str
+    body: str
+
+
 class Platform(Protocol):
     """A hosting platform, as far as publishing a review is concerned."""
 
@@ -221,3 +245,16 @@ class Platform(Protocol):
         """Say something on the issue. Every closure says why before it happens."""
 
     def close_issue(self, issue: Issue) -> None: ...
+
+    def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
+        """Open change requests whose branch starts with the agent's own prefix.
+
+        Asked before any fix is prepared. A run that cannot see what it already has open is a run
+        that opens a second change request carrying the same edit.
+        """
+
+    def push(self, path: Path, branch: str) -> None:
+        """Send a prepared branch to the hosting platform, under the agent's own credential."""
+
+    def propose(self, new: NewChange) -> Proposal:
+        """Open a change request for a branch that is already pushed."""

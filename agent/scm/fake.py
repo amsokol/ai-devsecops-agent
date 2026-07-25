@@ -10,14 +10,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from agent.scm import marker
 from agent.scm.port import (
     Change,
     Identity,
     Issue,
+    NewChange,
     NewIssue,
     NewThread,
+    Proposal,
     Review,
     ScmError,
     Stance,
@@ -58,6 +61,11 @@ class FakePlatform:
     closed: list[Issue] = field(default_factory=list)
     notes: list[tuple[str, str]] = field(default_factory=list)
     labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    proposed: list[Proposal] = field(default_factory=list)
+    pushed: list[str] = field(default_factory=list)
+    bodies: list[tuple[str, str]] = field(default_factory=list)
+    unpushable: tuple[str, ...] = ()
+    """Branches the platform will refuse, which is what an earlier run's leftover branch does."""
 
     @property
     def name(self) -> str:
@@ -163,6 +171,30 @@ class FakePlatform:
         self.tracked = [item for item in self.tracked if item.number != issue.number]
         self.closed.append(issue)
         self.calls.append(Call("close_issue", key=issue.key))
+
+    def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
+        self._check()
+        return tuple(item for item in self.proposed if item.head.startswith(prefix))
+
+    def push(self, path: Path, branch: str) -> None:
+        self._check()
+        if branch in self.unpushable:
+            raise ScmError(f"pushing {branch} failed: it is not a fast-forward")
+        self.pushed.append(branch)
+        self.calls.append(Call("push", detail=branch))
+
+    def propose(self, new: NewChange) -> Proposal:
+        self._check()
+        if new.head not in self.pushed:
+            # A change request for a branch nobody sent is the platform's error to give, and a fake
+            # that allowed it would hide the ordering bug that causes it.
+            raise ScmError(f"no branch named {new.head} on the platform")
+        number = len(self.proposed) + 100
+        opened = Proposal(number=number, head=new.head, reference=f"fake://change/{number}")
+        self.proposed.append(opened)
+        self.bodies.append((new.head, new.body))
+        self.calls.append(Call("propose", detail=new.title))
+        return opened
 
     def _find(self, thread: Thread) -> Thread:
         return next(item for item in self.opened if item.id == thread.id)

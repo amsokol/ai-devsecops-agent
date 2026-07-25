@@ -200,7 +200,9 @@ def test_a_maintenance_run_that_publishes_writes_issues_and_no_review(
         "raised": 0,
         "closed": 0,
         "failure": "",
+        "tracked": {},
     }
+    assert "changes" not in record.manifest.actions
     assert "review" not in record.manifest.actions
     assert not platform.reviews
     assert not platform.tracked

@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Self
 
 from agent.errors import ConfigError
@@ -29,8 +30,10 @@ from agent.scm.port import (
     Change,
     Identity,
     Issue,
+    NewChange,
     NewIssue,
     NewThread,
+    Proposal,
     Review,
     ScmError,
     Stance,
@@ -360,6 +363,78 @@ class GitHub:
             f"repos/{self.slug}/issues/{issue.number}",
             method="PATCH",
             body={"state": "closed", "state_reason": "completed"},
+        )
+
+    def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
+        found: list[Proposal] = []
+        for item in self._paged(f"repos/{self.slug}/pulls", query="state=open"):
+            head = item.get("head")
+            reference = str(head.get("ref") or "") if isinstance(head, dict) else ""
+            if not reference.startswith(prefix):
+                continue
+            found.append(
+                Proposal(
+                    number=int(item.get("number", 0)),
+                    head=reference,
+                    reference=str(item.get("html_url") or ""),
+                )
+            )
+        return tuple(found)
+
+    def push(self, path: Path, branch: str) -> None:
+        """Send the branch over HTTPS with the run's own credential, and never force.
+
+        The token reaches git through a credential helper that reads it from the environment, so it
+        appears in no command line: an argument is visible to every process on the machine, and a
+        token in CI output is a token that has to be rotated. The configured helpers are cleared
+        first, because a machine with a keychain would otherwise answer with a developer's login —
+        the very substitution this whole path exists to prevent.
+
+        The URL is built rather than taken from the remote: a checkout cloned over SSH would
+        authenticate with somebody's key and push as them.
+        """
+        located = shutil.which("git")
+        if located is None:
+            raise ScmError("git is not available on PATH, so nothing can be pushed")
+        helper = 'f() { echo username=x-access-token; echo "password=$AGENT_PUSH_TOKEN"; }; f'
+        finished = subprocess.run(  # noqa: S603 - fixed binary, no shell, arguments are ours
+            [
+                located,
+                "-C",
+                str(path),
+                "-c",
+                "credential.helper=",
+                "-c",
+                f"credential.helper=!{helper}",
+                "push",
+                f"https://github.com/{self.slug}.git",
+                f"refs/heads/{branch}:refs/heads/{branch}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+            check=False,
+            env=dict(os.environ) | {"AGENT_PUSH_TOKEN": self.credential.token},
+        )
+        if finished.returncode != 0:
+            detail = finished.stderr.strip().splitlines()[-1:] or ["no reason given"]
+            raise ScmError(f"pushing {branch} failed: {detail[0]}")
+
+    def propose(self, new: NewChange) -> Proposal:
+        got = self._api(
+            f"repos/{self.slug}/pulls",
+            method="POST",
+            body={
+                "title": new.title,
+                "body": new.body,
+                "head": new.head,
+                "base": new.base,
+            },
+        )
+        return Proposal(
+            number=int(got.get("number", 0)),
+            head=new.head,
+            reference=str(got.get("html_url") or ""),
         )
 
     def _ensure_label(self, label: str) -> None:

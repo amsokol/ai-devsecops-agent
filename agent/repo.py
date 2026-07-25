@@ -69,6 +69,20 @@ class Repository:
             return False
         return True
 
+    @property
+    def branch(self) -> str:
+        """The branch this checkout is on, which is what a fix is proposed against.
+
+        A detached head — how some CI runners arrive — is answered with the remote's own default
+        branch rather than with a guess: proposing a change against the wrong base is a diff nobody
+        can read, and against `main` in a repository whose default is `master` it simply fails.
+        """
+        name = _git(self.path, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        if name != "HEAD":
+            return name
+        default = _git(self.path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").strip()
+        return default.split("/", 1)[-1]
+
     def remote(self, name: str = "origin") -> str:
         """Where this checkout came from, which is the only honest answer to "which repository".
 
@@ -76,6 +90,10 @@ class Repository:
         checkout, and the failure mode is a review published on somebody else's pull request.
         """
         return _git(self.path, "remote", "get-url", name).strip()
+
+
+COMMITTER = "devsecops-agent"
+COMMITTER_EMAIL = "devsecops-agent@users.noreply.github.com"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,14 +153,18 @@ class Worktree:
         already verified — losing the work for a reason that has nothing to do with the fix. Hooks
         are skipped for the same reason and one more: the repository is untrusted content, and the
         commands this run agrees to execute are the overlay's verification, which already ran.
+
+        The address is a `users.noreply` one so that no person can ever be shown as the author of a
+        machine's commit. Hosting platforms match commits to accounts by e-mail, and a plausible
+        address is how a fix ends up in somebody's contribution graph without their knowledge.
         """
         _git(self.path, "add", "--all")
         _git(
             self.path,
             "-c",
-            "user.name=devsecops-agent",
+            f"user.name={COMMITTER}",
             "-c",
-            "user.email=agent@localhost",
+            f"user.email={COMMITTER_EMAIL}",
             "-c",
             "commit.gpgsign=false",
             "commit",

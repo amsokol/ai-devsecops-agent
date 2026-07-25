@@ -137,6 +137,30 @@ on the unchanged head still stops the fix — a red branch is a branch nobody tr
 red — but the run reports the product's own checks as the cause and names them, so a week of refusals
 is not read as the agent being unable to bump a dependency.
 
+**With `--publish`, a verified branch is pushed and proposed.** The agent asks the platform which of
+its own branches already carry an open change request *before* preparing anything: that answer decides
+what is worth fixing at all, since a subject already under review would otherwise get a second change
+request with the same edit in it. If that answer cannot be read, no branches are prepared — preparing
+them blind is how duplicates happen, and a wasted fix session costs less than a reviewer's afternoon.
+
+The change request body is derived from the record: the finding, the remediation, what the fix task
+reported in its own words, the surfaces that ran in full, and any command that was already failing on
+the base commit. It links the issues it answers with a plain reference and no closing keyword — a merge
+would close them on the platform's word, while closing here means the check that owns the finding
+looked again and found nothing, which the next maintenance run establishes and records.
+
+Pushing uses the agent's own credential over HTTPS, with the token passed to git through a credential
+helper that reads it from the environment rather than from a command line, and with any configured
+helper cleared first so a developer's keychain cannot answer instead. Nothing is ever force-pushed: a
+branch that will not fast-forward is reported and left as it is. Commits are authored as
+`devsecops-agent <devsecops-agent@users.noreply.github.com>` — a `users.noreply` address on purpose,
+because platforms match commits to accounts by e-mail and a plausible address is how a machine's commit
+ends up in somebody's contribution graph.
+
+An agent's own change request is one it cannot approve: GitHub refuses a review event from a pull
+request's author, whoever that author is. That is the correct shape anyway — merge authority stays with
+the humans and the required checks, and the agent's part ends at proposing something verified.
+
 ## Publishing a review
 
 A review run says nothing on the platform unless it is asked to: `--publish` with `--change`. Local
@@ -262,16 +286,29 @@ identifier — so a saved search keeps matching while the body is updated in pla
 are limited by the overlay (`maintenance.new_issues_per_run`); findings over the limit are left for the
 next run and named in the record, never dropped and never merged into somebody else's issue.
 
+The same run pushes what it verified and proposes it, so a weekly pass needs write access to all three:
+
+```yaml
+permissions:
+  contents: write             # push fix branches; never force, never the default branch
+  issues: write               # raise, update and close tracked findings
+  pull-requests: write        # propose the branches it prepared
+steps:
+  - uses: actions/checkout@v5
+  - run: uv run agent maintain --publish
+    env:
+      AGENT_GITHUB_TOKEN: ${{ steps.agent.outputs.token }}
+```
+
 ## Status
 
 Stage 6, second slice: a review run publishes its decision on GitHub and reconciles its threads by
-finding key, and a maintenance run tracks its findings as issues by the same key. Before them, a
-maintenance run prepares verified fix branches locally, on top of the decision path, the tool
-registry, the Cursor SDK adapter, role bindings, concurrency and budgets; every analyst capability the
-library defines can run, and a run can be narrowed with `--only` (for example `deps-vuln@python-uv`).
-What is still ahead: pushing those fix branches and opening the change requests that carry them, the
-restraints a scheduled run needs, and the eval harness. `backend: fake` remains available for CI that
-must exercise the pipeline without a model.
+finding key, and a maintenance run tracks its findings as issues by the same key, pushes what it
+verified and proposes it as a change request. Under that sit the decision path, the tool registry, the
+Cursor SDK adapter, role bindings, concurrency and budgets; every analyst capability the library
+defines can run, and a run can be narrowed with `--only` (for example `deps-vuln@python-uv`). What is
+still ahead: the restraints a scheduled run needs, not waking the agent on its own comment, and the
+eval harness. `backend: fake` remains available for CI that must exercise the pipeline without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.
