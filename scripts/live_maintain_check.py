@@ -8,8 +8,13 @@ person who started the run, and whether a label the repository has never seen co
     uv run python scripts/live_maintain_check.py --repo /path/to/worktree
 
 It creates a scratch branch with one throwaway file, pushes it, proposes it, raises an issue, closes
-that issue with a note, and then puts everything back: the change request closed, the branch gone
-locally and remotely. Pass --keep to read the result in a browser first.
+that issue with a note, stores and re-reads the agent's own memory ref, then puts everything back:
+the change request closed, the branch gone locally and remotely. Pass --keep to read it in a
+browser.
+
+The memory ref is here for one question a unit test cannot answer: `refs/agent/state` is neither a
+branch nor a tag, and whether a platform lets an App push such a ref at all is the platform's own
+decision. If it refuses, every scheduled run would warn that it cannot remember what keeps failing.
 
 Whose token is in the environment decides who owns all of it. The account is printed before anything
 is written.
@@ -29,8 +34,10 @@ from agent.errors import ConfigError
 from agent.repo import Repository, Worktree
 from agent.scm import GitHub, ScmError, marker
 from agent.scm.port import NewChange, NewIssue
+from agent.state import Memory
 
 LABEL = "agent"
+REF = "refs/agent/state"
 KEY = "capabilities/live-check:scratch"
 SCRATCH = "LIVE-CHECK.md"
 
@@ -58,7 +65,7 @@ def main() -> int:
     print(f"\n== branch\n   {branch} at {tree[:12]}")
 
     try:
-        platform.push(repository.path, branch)
+        platform.push(repository.path, source=f"refs/heads/{branch}", target=f"refs/heads/{branch}")
     except ScmError as error:
         print(f"   push failed: {error}")
         _forget(repository, branch)
@@ -97,6 +104,8 @@ def main() -> int:
     platform.close_issue(raised)
     print("   closed with a note")
 
+    _remember(repository, platform)
+
     if arguments.keep:
         print(f"\nleft open: #{opened.number} and branch {branch}")
         return 0
@@ -105,6 +114,28 @@ def main() -> int:
     _forget(repository, branch)
     print(f"\ncleaned up: #{opened.number} closed, {branch} removed here and there")
     return 0
+
+
+def _remember(repository: Repository, platform: GitHub) -> None:
+    """Store a throwaway document in the memory ref, read it back, and leave the ref where it was.
+
+    Left where it was rather than deleted: a repository that is already running the agent has real
+    counters there, and a check that wipes them would cost a week of escalation. A scratch key is
+    added and then the previous document is written back, so the only trace is two commits in a ref
+    nobody reads.
+    """
+    memory = Memory(repository=repository, ref=REF)
+    before = memory.read()
+    print(f"\n== memory\n   {REF} holds {len(before)} key(s) before this")
+    scratch = dict(before) | {"live_check": token_hex(4)}
+    stored, failure = memory.write(scratch, platform=platform, run="live-check")
+    if failure:
+        print(f"   not stored: {failure}")
+        return
+    read_back = memory.read()
+    print(f"   stored {stored}, read back {read_back == scratch}")
+    memory.write(before, platform=platform, run="live-check-restore")
+    print(f"   restored to {len(memory.read())} key(s)")
 
 
 def _settle(platform: GitHub, number: int, *, limit: int = 20) -> str:

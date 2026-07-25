@@ -53,6 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(maintain)
     maintain.add_argument("--wake-issue", type=int, help="issue whose comment woke this run")
     maintain.add_argument(
+        "--actor",
+        default="",
+        help=(
+            "login whose comment woke this run. A bot's comment, or the agent's own account, ends "
+            "the run before it spends anything: an agent that answers itself answers forever"
+        ),
+    )
+    maintain.add_argument(
         "--scheduled",
         action="store_true",
         help="this run came from a schedule, so the restraint rules for unattended runs apply",
@@ -154,7 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _request(arguments: argparse.Namespace) -> Request:
     trigger = (
-        (Trigger.MAINTAIN_SCHEDULED if arguments.scheduled else Trigger.MAINTAIN_REQUESTED)
+        _maintenance_trigger(arguments)
         if arguments.command == "maintain"
         else Trigger(arguments.trigger)
     )
@@ -169,12 +177,27 @@ def _request(arguments: argparse.Namespace) -> Request:
         base=getattr(arguments, "base", None),
         change=getattr(arguments, "change", None),
         wake_issue=getattr(arguments, "wake_issue", None),
+        actor=getattr(arguments, "actor", "") or "",
         plan_only=arguments.plan_only,
         dry_run=getattr(arguments, "dry_run", False),
         publish=getattr(arguments, "publish", False),
         use_cache=not arguments.no_cache,
         only=tuple(arguments.only or ()),
     )
+
+
+def _maintenance_trigger(arguments: argparse.Namespace) -> Trigger:
+    """A schedule, somebody's comment, or somebody asking directly — in that order of precedence.
+
+    A wake is its own trigger rather than a flag on a request because everything downstream reads
+    it: a person is waiting, so it gets the interactive budget, and whose comment it was decides
+    whether the run should happen at all.
+    """
+    if arguments.scheduled:
+        return Trigger.MAINTAIN_SCHEDULED
+    if arguments.wake_issue is not None:
+        return Trigger.HUMAN_COMMENT
+    return Trigger.MAINTAIN_REQUESTED
 
 
 def _print_actions(actions: dict[str, Any]) -> None:

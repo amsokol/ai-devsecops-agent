@@ -1,7 +1,7 @@
 [project]
 name = "ai-devsecops-agent"
 version = "0.1.0"
-description = "Model-agnostic DevSecOps agent: deterministic core, knowledge from a versioned library"
+description = "Model-agnostic AI DevSecOps agent: deterministic core, knowledge from a versioned library"
 requires-python = ">=3.14"
 license = "Apache-2.0"
 dependencies = [

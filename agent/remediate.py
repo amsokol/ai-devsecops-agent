@@ -149,7 +149,7 @@ def plan_fixes(
     overlay: Overlay,
     playbook: str,
     repository: Repository,
-    open_change_requests: int,
+    max_open_fix_requests: int,
     proposed: tuple[str, ...] = (),
 ) -> Queue:
     """Which findings this run will try to fix, in the order it will ship them.
@@ -184,7 +184,7 @@ def plan_fixes(
     # review. Reopening it as a second one is the noise this whole phase exists to avoid, and the
     # queue counts what is open rather than what this run adds: the limit is on a team's attention.
     open_now = {name for name in proposed if name.startswith(BRANCH_PREFIX)}
-    room = max(0, open_change_requests - len(open_now))
+    room = max(0, max_open_fix_requests - len(open_now))
     for group in _grouped(judged, deferred):
         first, rest = group[0], group[1:]
         branch = branch_for(first)
@@ -200,7 +200,7 @@ def plan_fixes(
             _defer(
                 deferred,
                 group,
-                f"the queue allows {open_change_requests} open change request(s) and "
+                f"the queue allows {max_open_fix_requests} open fix request(s) and "
                 f"{len(open_now)} are open; the next run will take this one",
             )
             continue
@@ -500,7 +500,7 @@ def _settle(fix: Fix, *, tree: Worktree, run: str) -> None:
             "",
             f"Finding{'s' if fix.job.also else ''}: {', '.join(fix.job.keys)}",
             f"Verified: {surfaces}" if surfaces else "",
-            f"Prepared by the DevSecOps agent in run {run}.",
+            f"Prepared by ai-devsecops-agent in run {run}.",
         ]
     )
     fix.commit = tree.commit(message.replace("\n\n\n", "\n\n"))

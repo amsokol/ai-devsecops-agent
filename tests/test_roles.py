@@ -1,37 +1,52 @@
-"""Binding a role to a backend and a model, and refusing a binding that cannot work."""
+"""Binding a role to a backend and a model, and refusing a binding that cannot work.
+
+The pairs come from the product's overlay: the agent ships no model, in code or in configuration. So
+these tests build the choices a product would write and check what the agent does with them.
+"""
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
 from agent.backends import FakeBackend
 from agent.backends.abilities import ABILITIES, CURSOR, Abilities
 from agent.backends.select import Roster
-from agent.config import BUILTIN_CONFIG_DIR, Config
+from agent.config import BUILTIN_CONFIG_DIR, Config, Models
 from agent.domain import Role
 from agent.errors import ConfigError
+from agent.overlay import Choice
 from agent.roles import NEEDS, Ability
 
-
-def config_with(models: str, tmp_path: Path) -> Config:
-    directory = tmp_path / "config"
-    shutil.copytree(BUILTIN_CONFIG_DIR, directory, dirs_exist_ok=True)
-    (directory / "models.yaml").write_text(models, encoding="utf-8")
-    return Config.load(directory)
+WHERE = "agent.yaml (models)"
 
 
-def test_the_shipped_configuration_binds_every_role_a_run_reaches() -> None:
-    """What a release enforces, asserted without a --config-dir standing in for it."""
-    models = Config.load().models
-    assert models.for_role(Role.ANALYST).backend == "cursor"
-    # A maintenance run refuses to start without this one, so its absence would be a release that
-    # cannot maintain anything.
-    assert models.for_role(Role.FIXER).backend == "cursor"
-    for binding in models.bindings.values():
-        abilities = ABILITIES[binding.backend]
-        assert not abilities.missing(NEEDS[binding.role])
+def chosen(pairs: dict[Role, Choice], options: dict[str, object] | None = None) -> Models:
+    return Models.chosen(pairs, options=options or {}, where=WHERE)
+
+
+def test_the_shipped_configuration_names_no_model_anywhere() -> None:
+    """The property the whole arrangement rests on, asserted rather than trusted.
+
+    A model named in the agent — in code or in a file it ships — makes switching provider a fork of
+    the agent, and makes the agent decide what somebody else's run costs. Comments may discuss
+    models; keys may not name one.
+    """
+    config = Config.load()
+    assert set(config.backend_options) <= set(ABILITIES)
+    for settings in config.backend_options.values():
+        assert "model" not in settings
+    for path in sorted(BUILTIN_CONFIG_DIR.rglob("*.yaml")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            key = line.split("#", 1)[0].strip().split(":", 1)[0]
+            assert key not in {"model", "models"}, f"{path}:{number} names a model"
+
+
+def test_a_pair_from_an_overlay_is_checked_against_what_the_adapter_can_do() -> None:
+    models = chosen({Role.ANALYST: Choice(backend="cursor", model="composer-2.5")})
+    binding = models.for_role(Role.ANALYST)
+    assert (binding.backend, binding.model) == ("cursor", "composer-2.5")
+    assert not ABILITIES[binding.backend].missing(NEEDS[binding.role])
 
 
 def test_every_declared_ability_is_one_a_role_or_an_eval_can_ask_about() -> None:
@@ -41,18 +56,18 @@ def test_every_declared_ability_is_one_a_role_or_an_eval_can_ask_about() -> None
 
 
 def test_a_role_on_a_backend_that_cannot_do_its_work_is_refused_at_startup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The point of the check: a run that spends its budget before discovering the mismatch.
 
     No shipped adapter is missing `tools` today, so the incompatible backend is introduced here. The
-    check is worth proving anyway: it is what stands between a typo in `models.yaml` and a
-    maintenance run that reports findings and silently ships nothing.
+    check is worth proving anyway: it is what stands between a typo in an overlay and a maintenance
+    run that reports findings and silently ships nothing.
     """
     toolless = Abilities(name="toolless", has=frozenset({Ability.TOKEN_ACCOUNTING}))
     monkeypatch.setitem(ABILITIES, toolless.name, toolless)
     with pytest.raises(ConfigError) as error:
-        config_with("roles:\n  fixer:\n    backend: toolless\n    model: none\n", tmp_path)
+        chosen({Role.FIXER: Choice(backend="toolless", model="none")})
     assert "tools" in str(error.value)
     assert "fixer" in str(error.value)
 
@@ -67,50 +82,44 @@ def test_mutation_is_a_tool_of_ours_rather_than_an_ability_of_a_backend() -> Non
     assert not CURSOR.missing(NEEDS[Role.FIXER])
 
 
-def test_an_unknown_role_or_backend_is_a_startup_error(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="unknown role 'reviewer'"):
-        config_with("roles:\n  reviewer:\n    backend: fake\n    model: none\n", tmp_path)
-    with pytest.raises(ConfigError, match="unknown backend 'claude'"):
-        config_with("roles:\n  analyst:\n    backend: claude\n    model: sonnet\n", tmp_path)
+def test_an_unknown_backend_is_an_error_naming_the_file_that_chose_it() -> None:
+    with pytest.raises(ConfigError) as error:
+        chosen({Role.ANALYST: Choice(backend="claude", model="sonnet")})
+    assert "unknown backend 'claude'" in str(error.value)
+    assert WHERE in str(error.value)
 
 
-def test_a_model_without_a_backend_is_not_an_address(tmp_path: Path) -> None:
+def test_a_model_without_a_backend_is_not_an_address() -> None:
     with pytest.raises(ConfigError, match="needs both a backend and a model"):
-        config_with("roles:\n  analyst:\n    model: composer-2.5\n", tmp_path)
+        chosen({Role.ANALYST: Choice(backend="", model="composer-2.5")})
 
 
-def test_a_configuration_that_binds_nobody_could_run_no_task(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="no role is bound"):
-        config_with("roles: {}\n", tmp_path)
-
-
-def test_a_role_nobody_bound_says_so_instead_of_guessing(tmp_path: Path) -> None:
-    models = config_with(
-        "roles:\n  analyst:\n    backend: fake\n    model: none\n", tmp_path
-    ).models
+def test_a_role_nobody_bound_says_so_instead_of_guessing() -> None:
+    models = chosen({Role.ANALYST: Choice(backend="fake", model="none")})
     with pytest.raises(ConfigError) as error:
         models.for_role(Role.WRITER)
     assert "'writer'" in str(error.value)
     assert "analyst" in str(error.value)
 
 
-def test_backend_options_reach_the_adapter(tmp_path: Path) -> None:
-    models = config_with(
-        "roles:\n  analyst:\n    backend: cursor\n    model: composer-2.5\n"
-        "backends:\n  cursor:\n    sandbox: false\n",
-        tmp_path,
-    ).models
-    assert models.for_role(Role.ANALYST).sandbox is False
-    assert Config.load().models.for_role(Role.ANALYST).sandbox is True
+def test_backend_settings_come_from_the_agent_and_not_from_the_product() -> None:
+    """A product chooses what it pays for; how tightly that runs is the agent's business."""
+    loosened = chosen(
+        {Role.ANALYST: Choice(backend="cursor", model="composer-2.5")},
+        {"cursor": {"sandbox": False}},
+    )
+    assert loosened.for_role(Role.ANALYST).sandbox is False
+    shipped = Config.load().backend_options
+    assert shipped["cursor"]["sandbox"] is True
 
 
 def test_two_roles_on_the_same_pair_share_one_backend(tmp_path: Path) -> None:
-    models = config_with(
-        "roles:\n"
-        "  analyst:\n    backend: fake\n    model: none\n"
-        "  writer:\n    backend: fake\n    model: none\n",
-        tmp_path,
-    ).models
+    models = chosen(
+        {
+            Role.ANALYST: Choice(backend="fake", model="none"),
+            Role.WRITER: Choice(backend="fake", model="none"),
+        }
+    )
     roster = Roster(models)
     assert roster.for_role(Role.ANALYST) is roster.for_role(Role.WRITER)
     assert roster.used() == [

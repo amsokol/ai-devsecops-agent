@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -17,15 +18,16 @@ from agent import __version__
 from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
-from agent.config import Config
+from agent.config import Config, Models
 from agent.domain import FixOutcome, Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
+from agent.escalate import Escalation, weigh
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
 from agent.issues import track_findings
 from agent.library import Library
 from agent.manifest import Manifest
-from agent.overlay import Overlay
+from agent.overlay import MAINTENANCE, REVIEW, VALUES_FILE, Overlay, digest_on_disk, within
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
 from agent.propose import propose_fixes
@@ -36,13 +38,16 @@ from agent.repo import ChangeView, Repository
 from agent.report import render
 from agent.scm import GitHub, Platform, ScmError
 from agent.session import Session
+from agent.state import Memory
 from agent.storage import FactCache
 from agent.toolkit import Toolkits
 from agent.tools import grant
 from agent.verdict import TaskOutcome, Verdict, decide, judge
 
 PLANNED = "planned"
+DECLINED = "declined"
 REPORT = "report.md"
+BOT_SUFFIX = "[bot]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +61,9 @@ class Request:
     base: str | None = None
     change: int | None = None
     wake_issue: int | None = None
+    actor: str = ""
+    """The account whose action started this run. Given by whatever woke the agent, and checked
+    before anything is spent: an agent that answers its own comment answers it forever."""
     plan_only: bool = False
     dry_run: bool = False
     """Analyse and say what would be fixed, without creating a worktree, a branch or a commit."""
@@ -75,6 +83,61 @@ class RunRecord:
     exit_code: ExitCode
     verdict: Verdict | None = None
     report: str = ""
+
+
+def _overlay_for(
+    request: Request,
+    *,
+    repository: Repository,
+    base: str | None,
+    library: Library,
+    config: Config,
+) -> tuple[Overlay, str]:
+    """The overlay this run obeys, and what the report must say when it is not the visible one.
+
+    A review reads the overlay from the merge base rather than from the checkout. The overlay is
+    where the meaning of a finding is settled here — the quarantine window, the local exceptions,
+    which ecosystems are examined at all — and `NOTES.md` enters every task's prompt. Read from the
+    checkout, all of that would be editable by the change being examined: one commit could set the
+    quarantine to zero, drop the ecosystem whose dependency it bumps, or add a line to the notes
+    telling the model what to conclude, and the run would carry out those instructions while
+    reporting a pass. The change is still reviewed in full; it just does not get to write the rules
+    it is judged by.
+
+    Two cases legitimately fall back to the checkout, and both say so. An overlay kept outside the
+    repository is not part of any change, so there is nothing to protect it from. A base that has no
+    overlay is a change introducing one, and there is no earlier version to prefer.
+    """
+    load = partial(
+        Overlay.load,
+        request.overlay_path,
+        library=library,
+        notes_limit=config.notes_limit,
+    )
+    if base is None:
+        return load(), ""
+
+    committed = Overlay.at(
+        repository,
+        repository.merge_base(base),
+        path=request.overlay_path,
+        library=library,
+        notes_limit=config.notes_limit,
+    )
+    if committed is None:
+        if not within(repository.path, request.overlay_path):
+            return load(), ""
+        return load(), (
+            "the base of this change has no overlay, so this run read the one the change brings: "
+            "the rules it was judged by are the rules it proposes"
+        )
+    if digest_on_disk(request.overlay_path) != committed.digest:
+        return committed, (
+            f"this change edits the agent overlay in `{request.overlay_path.name}`; the run obeyed "
+            f"the base version ({committed.digest[:19]}), because a change does not set the rules "
+            "it is judged by. The edit takes effect once it is merged"
+        )
+    return committed, ""
 
 
 def _narrow(plan: Plan, only: tuple[str, ...]) -> Plan:
@@ -107,13 +170,6 @@ def run(
     # discovered when the first finding needs judging.
     rules = BlockingRules.read(library)
 
-    overlay = Overlay.load(
-        request.overlay_path,
-        library=library,
-        default_limits=config.maintenance_limits,
-        notes_limit=config.notes_limit,
-    )
-
     if request.publish and request.change is None and not request.trigger.is_maintenance:
         raise ConfigError(
             "--publish needs --change: there is no conversation to publish a review to without one"
@@ -126,6 +182,19 @@ def run(
     else:
         base = request.base or "main"
         change = ChangeSet(paths=repository.changed_paths(base))
+
+    overlay, notice = _overlay_for(
+        request, repository=repository, base=base, library=library, config=config
+    )
+    # What this kind of run is configured with: its models and its ceilings, from the one block that
+    # describes it. The agent names no model anywhere, so the overlay is the only place they exist.
+    settings = overlay.settings_for(request.trigger)
+    kind = MAINTENANCE if request.trigger.is_maintenance else REVIEW
+    models = Models.chosen(
+        settings.models,
+        options=config.backend_options,
+        where=f"{overlay.path / VALUES_FILE} ({kind}.models)",
+    )
 
     plan = plan_run(
         scenario=scenario,
@@ -153,16 +222,20 @@ def run(
         },
         overlay={
             "path": str(overlay.path),
+            "origin": overlay.origin,
             "digest": overlay.digest,
             "ecosystems": list(overlay.ecosystems),
             "quarantine_days": overlay.quarantine_days,
-            "maintenance": {
-                "open_change_requests": overlay.limits.open_change_requests,
-                "new_issues_per_run": overlay.limits.new_issues_per_run,
+            "kind": kind,
+            "queue": {
+                "max_open_fix_requests": overlay.queue.max_open_fix_requests,
+                "max_new_issues_per_run": overlay.queue.max_new_issues_per_run,
             },
         },
     )
     manifest.warnings.extend(overlay.warnings)
+    if notice:
+        manifest.warnings.append(notice)
     if request.only:
         manifest.partial = list(request.only)
         manifest.warnings.append(
@@ -196,21 +269,35 @@ def run(
     # never ships anything, which looks exactly like a week with nothing to fix.
     may_fix = request.trigger.is_maintenance and not request.dry_run and not request.plan_only
     needed = {task.role for task in plan.tasks} | ({Role.FIXER} if may_fix else set())
-    manifest.roles = [config.models.for_role(role).as_json() for role in sorted(needed)]
+    manifest.roles = [models.for_role(role).as_json() for role in sorted(needed)]
 
     # Recorded before the plan-only exit: seeing what a trigger would be allowed to spend is half
     # the reason to ask for a plan without running one.
-    limits = config.execution.budget_for(request.trigger)
+    spend = settings.limits
     manifest.budget = {
-        "task_seconds": limits.task_seconds,
-        "task_steps": limits.task_steps,
-        "max_parallel": limits.max_parallel,
-        "run_tokens": limits.run_tokens,
-        "scheduled": request.trigger.is_scheduled,
+        "task_seconds": spend.seconds_per_task,
+        "task_steps": config.steps_limit,
+        "max_parallel": spend.tasks_at_once,
+        "run_tokens": spend.tokens_per_run,
+        "kind": kind,
     }
 
     if request.plan_only:
         manifest.finish(PLANNED)
+        return RunRecord(manifest, manifest.write(request.run_dir), ExitCode.OK)
+
+    # Resolved before anything is spent, because two questions depend on it: whether this run should
+    # exist at all, and which branches are already under review. A run that guesses the second opens
+    # a change request somebody is already reviewing; one that skips the first answers itself.
+    speaker, speaks = _resolve(request, platform=platform, repository=repository)
+    if speaks:
+        manifest.warnings.append(f"nothing was published: {speaks}")
+    refusal = _woke_itself(request, platform=speaker)
+    if refusal:
+        # Recorded as a run, deliberately: "the agent declined to answer its own comment" is the
+        # property this check exists for, and a run that left no trace could not demonstrate it.
+        manifest.warnings.append(refusal)
+        manifest.finish(DECLINED)
         return RunRecord(manifest, manifest.write(request.run_dir), ExitCode.OK)
 
     # Only a run on the default branch may write facts. A review runs on code a stranger proposed,
@@ -227,7 +314,7 @@ def run(
     )
 
     owned = backend is None
-    roster = Roster.of(backend) if backend is not None else Roster(config.models)
+    roster = Roster.of(backend) if backend is not None else Roster(models)
     if owned:
         # Created up front, so an SDK this machine has not installed is an error before the first
         # task rather than one task's failure among several.
@@ -242,14 +329,8 @@ def run(
     # One event loop for execution and shutdown alike. A backend that holds a subprocess cannot be
     # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
     # fails with a future attached to another loop.
-    ledger = Ledger(RunBudget(max_parallel=limits.max_parallel, tokens=limits.run_tokens))
+    ledger = Ledger(RunBudget(max_parallel=spend.tasks_at_once, tokens=spend.tokens_per_run))
 
-    # Resolved before the fix phase rather than after it: which branches are already under review
-    # decides which fixes are worth preparing at all, and a run that guesses opens a second change
-    # request carrying an edit somebody is already reviewing.
-    speaker, speaks = _resolve(request, platform=platform, repository=repository)
-    if speaks:
-        manifest.warnings.append(f"nothing was published: {speaks}")
     proposed: tuple[str, ...] = ()
     if may_fix and request.publish:
         if speaker is None:
@@ -275,7 +356,7 @@ def run(
             rules=rules,
             repository=repository,
             run_directory=run_directory,
-            budget=Budget(seconds=limits.task_seconds, steps=limits.task_steps),
+            budget=Budget(seconds=spend.seconds_per_task, steps=config.steps_limit),
             toolkits=toolkits,
             ledger=ledger,
             may_fix=may_fix,
@@ -295,11 +376,20 @@ def run(
         library_version=library.identity.version,
         unverified_facts=len(session.evidence.unverified()),
         fixes=tuple(fixes),
+        notice=notice,
     )
 
     if request.publish and speaker is not None:
         # After the report, because the report is what gets published, and outside the event loop
         # because talking to the platform is a subprocess away rather than a coroutine.
+        outcomes = tuple(item.outcome for item in executed)
+        escalations, remembered, document = _recall(
+            request,
+            config=config,
+            repository=repository,
+            outcomes=outcomes,
+            run=manifest.run_id,
+        )
         _announce(
             request,
             manifest=manifest,
@@ -307,10 +397,13 @@ def run(
             repository=repository,
             verdict=verdict,
             report=report,
-            outcomes=tuple(item.outcome for item in executed),
+            outcomes=outcomes,
             change=session.change,
             fixes=tuple(fixes),
-            new_issues=overlay.limits.new_issues_per_run,
+            new_issues=overlay.queue.max_new_issues_per_run,
+            escalations=escalations,
+            memory=remembered,
+            document=document,
         )
     elif request.publish:
         manifest.actions = {"failure": speaks}
@@ -368,7 +461,7 @@ async def _perform(
             overlay=overlay,
             playbook=plan.playbook,
             repository=repository,
-            open_change_requests=overlay.limits.open_change_requests,
+            max_open_fix_requests=overlay.queue.max_open_fix_requests,
             proposed=proposed,
         )
         fixes = await apply(
@@ -408,6 +501,60 @@ def _resolve(
         return None, str(error)
 
 
+def _woke_itself(request: Request, *, platform: Platform | None) -> str:
+    """Why this wake must be ignored, or an empty string when it is somebody's genuine request.
+
+    Two rules. The first is the library's: a bot's comment does not wake the agent. The second is
+    the loop this project has already seen the start of — a run publishing under a human account, in
+    a workflow that wakes on human comments, wakes itself. The account is compared rather than the
+    wording, because "was this comment mine?" has exactly one honest answer.
+
+    Only a wake is checked. A schedule and a manual run have no author to suspect, and a change
+    somebody pushed is a change worth reviewing whoever pushed it.
+    """
+    if not request.actor or not request.trigger.is_woken:
+        return ""
+    if request.actor.endswith(BOT_SUFFIX):
+        return (
+            f"declined: {request.actor} is a bot, and a machine's comment does not wake the agent. "
+            "A run per comment between two machines is a bill with no reader"
+        )
+    if platform is None:
+        # Without a credential there is no account to compare against, and the suffix rule above is
+        # all that can be checked. Said out loud rather than assumed safe.
+        return ""
+    try:
+        mine = platform.identity()
+    except ScmError:
+        return ""
+    if mine.login and mine.login == request.actor:
+        return (
+            f"declined: this run was woken by {request.actor}, which is the account the agent "
+            "publishes as. Answering its own comment is a loop, and each turn of it costs a model"
+        )
+    return ""
+
+
+def _recall(
+    request: Request,
+    *,
+    config: Config,
+    repository: Repository,
+    outcomes: tuple[TaskOutcome, ...],
+    run: str,
+) -> tuple[tuple[Escalation, ...], Memory | None, dict[str, Any]]:
+    """What earlier runs remember about failing checks, and what this run should remember.
+
+    Only a scheduled run keeps this. A run somebody started has that somebody watching its output,
+    so a failure needs no issue to be noticed; the memory exists for the runs nobody reads.
+    """
+    if not request.trigger.is_scheduled:
+        return (), None, {}
+    memory = Memory(repository=repository, ref=config.storage.state_ref)
+    escalations, document = weigh(outcomes, memory=memory.read(), run=run, when=datetime.now(UTC))
+    return escalations, memory, document
+
+
 def _announce(
     request: Request,
     *,
@@ -420,6 +567,9 @@ def _announce(
     change: ChangeView | None,
     fixes: tuple[Fix, ...],
     new_issues: int,
+    escalations: tuple[Escalation, ...] = (),
+    memory: Memory | None = None,
+    document: dict[str, Any] | None = None,
 ) -> None:
     """Write the decision where the trigger's audience is, and record who wrote it.
 
@@ -447,10 +597,24 @@ def _announce(
             outcomes=outcomes,
             head=repository.head,
             limit=new_issues,
+            escalations=escalations,
         )
         actions["issues"] = tracked.as_json()
+        if escalations:
+            actions["escalations"] = [item.as_json() for item in escalations]
         if tracked.failure:
             manifest.warnings.append(f"the tracked issues are incomplete: {tracked.failure}")
+        if memory is not None:
+            # Written after the issues, so a streak is only recorded as continuing once the run has
+            # done what the streak is for. A memory stored before the write, in a run that then
+            # fails to reach the tracker, would count a run that told nobody anything.
+            stored, failed = memory.write(document or {}, platform=platform, run=manifest.run_id)
+            actions["memory"] = {"ref": memory.ref, "stored": stored, "failure": failed}
+            if failed:
+                manifest.warnings.append(
+                    f"which checks keep failing was not remembered ({failed}), so a repeat next "
+                    "week reads as a first failure and is reported to nobody"
+                )
         if any(fix.outcome is FixOutcome.FIXED for fix in fixes):
             opened = propose_fixes(
                 platform,

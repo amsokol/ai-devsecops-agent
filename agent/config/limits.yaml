@@ -1,10 +1,13 @@
-# Defaults the overlay may narrow or widen, and limits the overlay cannot touch.
+# Limits the agent owns, because a product cannot answer them.
+#
+# How much a run may spend, how many issues it may open and which models it uses are not here: those
+# are decisions about somebody else's money and belong in the product's overlay.
 
-# Applied to a scheduled maintenance run when the overlay is silent. Reaching a limit defers
-# findings to the next run; it never drops them.
-maintenance:
-  open_change_requests: 3
-  new_issues_per_run: 5
+# Tool calls one task may make before it is stopped as unfinished. A guard against a session that has
+# stopped making progress — a wide repository scan that keeps reading files — rather than a budget. A
+# product has no way to choose this number: it counts an internal step nobody outside the agent sees,
+# and the cost it bounds is already bounded in tokens by the overlay.
+tool_calls_per_task: 120
 
 # The overlay's NOTES.md enters every task's context, so its size is paid for continuously.
 # Exceeding this is a warning, not an error: the run is still correct, only more expensive.

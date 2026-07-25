@@ -16,16 +16,27 @@ class Trigger(StrEnum):
     CHANGE_OPENED = "change-opened"
     CHANGE_UPDATED = "change-updated"
     HUMAN_COMMENT = "human-comment"
+    """Somebody answered one of the agent's issues, which is maintenance work with a person waiting.
+    Never a comment in a change-request conversation: that one is the review's business."""
     MAINTAIN_REQUESTED = "maintain-requested"
     MAINTAIN_SCHEDULED = "maintain-scheduled"
 
     @property
     def is_maintenance(self) -> bool:
-        return self in {Trigger.MAINTAIN_REQUESTED, Trigger.MAINTAIN_SCHEDULED}
+        return self in {
+            Trigger.HUMAN_COMMENT,
+            Trigger.MAINTAIN_REQUESTED,
+            Trigger.MAINTAIN_SCHEDULED,
+        }
 
     @property
     def is_scheduled(self) -> bool:
         return self is Trigger.MAINTAIN_SCHEDULED
+
+    @property
+    def is_woken(self) -> bool:
+        """Somebody's words started this run, which is the one case where who they were matters."""
+        return self is Trigger.HUMAN_COMMENT
 
 
 class Role(StrEnum):

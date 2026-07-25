@@ -302,12 +302,21 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
     """Read a YAML file that must contain a mapping, with errors naming the file."""
     if not path.is_file():
         raise ConfigError(f"{path} is missing")
+    return parse_yaml_mapping(path.read_text(encoding="utf-8"), named=str(path))
+
+
+def parse_yaml_mapping(text: str, *, named: str) -> dict[str, Any]:
+    """The same, for YAML that came from somewhere other than a file — a committed tree, say.
+
+    `named` is what the error messages call it, because "expected a mapping" without a location is a
+    message that sends somebody looking through every configuration file they have.
+    """
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = yaml.safe_load(text)
     except yaml.YAMLError as error:
-        raise ConfigError(f"{path}: {error}") from None
+        raise ConfigError(f"{named}: {error}") from None
     if raw is None:
-        raise ConfigError(f"{path} is empty")
+        raise ConfigError(f"{named} is empty")
     if not isinstance(raw, dict):
-        raise ConfigError(f"{path}: expected a mapping at the top level, got {type(raw).__name__}")
+        raise ConfigError(f"{named}: expected a mapping at the top level, got {type(raw).__name__}")
     return raw

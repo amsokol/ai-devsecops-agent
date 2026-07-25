@@ -1,21 +1,78 @@
 # Agent overlay — ai-devsecops-agent
 #
-# This repository is also the agent's first product: the overlay here is what the agent reads when
-# it reviews itself.
+# This repository is also the agent's first product: this is the overlay the agent reads when it
+# reviews itself. Values only — knowledge for the model lives in NOTES.md.
+#
+# The agent does two things, and the first two sections are those two things. Everything about a kind
+# of run is inside the block named after it: which models do the work, what it may spend, and — for
+# maintenance — how much it may leave behind. An unknown key is a startup error.
 
 schema: 1
 
+# A CHANGE CAME UP FOR REVIEW: find the problems, decide whether it may merge. Somebody is waiting.
+review:
+  models:
+    # `provider/model`: the provider on the left decides which models exist, so the name on the right
+    # is an address only together with it. Moving to another provider is one word on one line.
+    # Credentials come from the environment, never from this file — it is in git.
+    analyst: cursor/composer-2.5
+
+  # Reaching any limit below has one and the same effect: the work is reported as unfinished and the
+  # merge is refused — never as "nothing found". Each line says what moving the number does.
+  limits:
+    # Tokens the whole run may spend. Lower: a big change stops half-way and the gate says "did not
+    # finish". Higher: a runaway run costs more before it is cut off. For scale, a review of a small
+    # change measured about 3M. `null` means no ceiling at all.
+    tokens_per_run: 24000000
+
+    # Time one task gets. Lower: a slow task is cut off as unfinished. Higher: a stuck task holds the
+    # run open for longer before anyone learns it went wrong.
+    minutes_per_task: 15
+
+    # Tasks running at once. Higher: the review finishes sooner, until the provider starts refusing
+    # on its own rate limit. Lower: fewer refusals, longer wall clock.
+    tasks_at_once: 4
+
+# THE MAIN BRANCH IS BEING MAINTAINED: find the problems, fix what can be fixed and prove it safe.
+# Weekly on a timer or started by hand — the work is the same, so the numbers are the same.
+maintenance:
+  models:
+    analyst: cursor/composer-2.5   # finds what has gone stale or become vulnerable
+    fixer: cursor/composer-2.5     # writes the fix and runs the verification below
+
+  # Usually below the review's numbers: this run spends while nobody is watching it, and a mistake
+  # here should not arrive as an invoice a month later.
+  limits:
+    tokens_per_run: 12000000
+    minutes_per_task: 10
+    tasks_at_once: 2
+
+  # How much this run may leave behind. Not what it costs — how loud it is. Reaching either limit
+  # defers work to the next run and says so in the record; nothing is dropped.
+  queue:
+    # New issues one run may open. Lower: a quieter tracker, and more findings waiting a week.
+    max_new_issues_per_run: 5
+
+    # Fix branches allowed to be open for review at once. Reached: no new branch is prepared until
+    # one of them is merged or closed.
+    max_open_fix_requests: 3
+
+# WHAT IS LOOKED AT for dependency work. Only these ecosystems, by library identifier.
 ecosystems:
   - ecosystems/python-uv
   - ecosystems/github-actions
 
+# WHAT MATTERS MOST, most important first. Attention goes here before anywhere else.
 hotspots:
   - agent
   - tests
 
+# HOW LONG TO WAIT before adopting a freshly published version.
 quarantine:
   days: 7
 
+# HOW A FIX IS PROVED SAFE: commands per surface, in order, each as a list of arguments — there is no
+# shell. Without these, no fix is prepared at all: an unverified fix is not shipped.
 verification:
   python-uv:
     - [uv, sync, --frozen]

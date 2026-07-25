@@ -1,4 +1,4 @@
-"""DevSecOps agent: deterministic core, knowledge from a versioned library."""
+"""AI DevSecOps agent: deterministic core, knowledge from a versioned library."""
 
 from importlib.metadata import PackageNotFoundError, version
 

@@ -79,6 +79,24 @@ DOCUMENTS = {
 
 OVERLAY_VALUES = """\
 schema: 1
+review:
+  models:
+    analyst: fake/composer-2.5
+  limits:
+    tokens_per_run: 24000000
+    minutes_per_task: 15
+    tasks_at_once: 4
+maintenance:
+  models:
+    analyst: fake/composer-2.5
+    fixer: fake/composer-2.5
+  limits:
+    tokens_per_run: 12000000
+    minutes_per_task: 10
+    tasks_at_once: 2
+  queue:
+    max_new_issues_per_run: 5
+    max_open_fix_requests: 3
 ecosystems:
   - ecosystems/python-uv
 hotspots:
@@ -118,19 +136,15 @@ def config() -> Config:
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    """The shipped configuration, with the library pin removed and the backend replaced.
+    """The shipped configuration with the library pin removed, and nothing else changed.
 
-    The pin names the real library and these tests run against a fixture one; the backend would call
-    a model. Everything else — scenarios, ceiling, limits, budgets — stays exactly as it ships, so a
-    test still exercises what a release does.
+    The pin names the real library and these tests run against a fixture one. Which model runs is
+    not doctored here any more: the agent ships none, so the fixture overlay names the fake backend
+    and a test exercises exactly the configuration a release carries.
     """
     directory = tmp_path / "config"
     shutil.copytree(BUILTIN_CONFIG_DIR, directory)
     (directory / "library.yaml").write_text("version:\ndigest:\n", encoding="utf-8")
-    models = (directory / "models.yaml").read_text(encoding="utf-8")
-    (directory / "models.yaml").write_text(
-        models.replace("backend: cursor", "backend: fake"), encoding="utf-8"
-    )
     return directory
 
 
@@ -145,12 +159,7 @@ def overlay_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def overlay(overlay_root: Path, library: Library, config: Config) -> Overlay:
-    return Overlay.load(
-        overlay_root,
-        library=library,
-        default_limits=config.maintenance_limits,
-        notes_limit=config.notes_limit,
-    )
+    return Overlay.load(overlay_root, library=library, notes_limit=config.notes_limit)
 
 
 @pytest.fixture

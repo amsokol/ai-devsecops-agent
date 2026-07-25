@@ -334,7 +334,7 @@ def test_a_bot_identity_is_recorded_and_needs_no_warning(platform: FakePlatform)
     record = publish(platform, verdict_of(result=RunResult.PASS))
 
     assert record.identity is not None
-    assert record.identity.login == "devsecops-agent[bot]"
+    assert record.identity.login == "ai-devsecops-agent[bot]"
     assert not record.caution
 
 

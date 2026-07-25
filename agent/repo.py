@@ -14,7 +14,7 @@ from agent.errors import ConfigError
 _TIMEOUT_SECONDS = 30
 
 
-def _git(repo: Path, *arguments: str) -> str:
+def _git(repo: Path, *arguments: str, stdin: str | None = None) -> str:
     located = shutil.which("git")
     if located is None:
         raise ConfigError("git is not available on PATH")
@@ -25,6 +25,7 @@ def _git(repo: Path, *arguments: str) -> str:
             text=True,
             timeout=_TIMEOUT_SECONDS,
             check=False,
+            input=stdin,
         )
     except subprocess.TimeoutExpired:
         raise ConfigError(
@@ -91,9 +92,63 @@ class Repository:
         """
         return _git(self.path, "remote", "get-url", name).strip()
 
+    # Object plumbing, used by the agent's own memory between runs. A file in a commit that no
+    # branch points at is deliberate: the memory travels with the repository, is fetched by anyone
+    # who asks for it, and never appears in the history people read.
 
-COMMITTER = "devsecops-agent"
-COMMITTER_EMAIL = "devsecops-agent@users.noreply.github.com"
+    def fetch(self, ref: str, *, remote: str = "origin") -> bool:
+        """Bring a ref from the remote, answering whether it is there at all.
+
+        Read with whatever credential the checkout already has, unlike the write, which is the
+        agent's own. Fetching is what any clone may do; leaving a mark is not.
+        """
+        try:
+            _git(self.path, "fetch", "--quiet", remote, f"+{ref}:{ref}")
+        except ConfigError:
+            return False
+        return self.resolve(ref) is not None
+
+    def resolve(self, ref: str) -> str | None:
+        try:
+            return _git(self.path, "rev-parse", "--verify", "--quiet", ref).strip() or None
+        except ConfigError:
+            return None
+
+    def point(self, ref: str, at: str) -> None:
+        """Move a local ref, after the remote has accepted the same move."""
+        _git(self.path, "update-ref", ref, at)
+
+    def file_at(self, ref: str, path: str) -> str | None:
+        """Contents of one file in a committed tree, or None when either is absent."""
+        try:
+            return _git(self.path, "show", f"{ref}:{path}")
+        except ConfigError:
+            return None
+
+    def write_file(self, path: str, content: str, *, message: str, onto: str | None) -> str:
+        """Commit a single file as an orphan or on top of `onto`, and return the new commit.
+
+        Nothing is checked out and no index is touched, so this is safe to call in the middle of a
+        run: a state write that disturbed the working tree could change what a fix task is looking
+        at, and the two have nothing to do with each other.
+        """
+        blob = _git(self.path, "hash-object", "-w", "--stdin", stdin=content).strip()
+        tree = _git(self.path, "mktree", stdin=f"100644 blob {blob}\t{path}\n").strip()
+        arguments = ["commit-tree", tree, "-m", message]
+        if onto is not None:
+            arguments += ["-p", onto]
+        return _git(
+            self.path,
+            "-c",
+            f"user.name={COMMITTER}",
+            "-c",
+            f"user.email={COMMITTER_EMAIL}",
+            *arguments,
+        ).strip()
+
+
+COMMITTER = "ai-devsecops-agent"
+COMMITTER_EMAIL = "ai-devsecops-agent@users.noreply.github.com"
 
 
 @dataclass(frozen=True, slots=True)

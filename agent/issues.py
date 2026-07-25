@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.escalate import Escalation
 from agent.findings import Action
 from agent.reconcile import Posted, unproven
 from agent.scm import marker
@@ -66,6 +67,7 @@ def track_findings(
     outcomes: tuple[TaskOutcome, ...],
     head: str,
     limit: int,
+    escalations: tuple[Escalation, ...] = (),
     label: str = LABEL,
 ) -> Tracking:
     """Reconcile this run's findings with the issues already open, and record every step.
@@ -76,7 +78,7 @@ def track_findings(
     """
     record = Tracking()
     try:
-        return _track(platform, record, verdict, outcomes, head, limit, label)
+        return _track(platform, record, verdict, outcomes, head, limit, escalations, label)
     except ScmError as error:
         record.failure = str(error)
         return record
@@ -89,16 +91,22 @@ def _track(
     outcomes: tuple[TaskOutcome, ...],
     head: str,
     limit: int,
+    escalations: tuple[Escalation, ...],
     label: str,
 ) -> Tracking:
     existing = {item.key: item for item in platform.issues(label=label) if item.key}
-    current = {item.finding.key: item for item in verdict.judged}
+    # Findings and escalations are reconciled by one loop because they are the same kind of thing to
+    # a reader: one issue, found again by its key, closed when the check that owns it says so.
+    wanted = {item.finding.key: (_title(item), _body(item)) for item in verdict.judged}
+    wanted |= {item.key: (item.title, item.body) for item in escalations}
+    # A broken check hides everything it would have found, so the news that it is broken does not
+    # queue behind the findings of the checks that still work.
+    exempt = {item.key for item in escalations}
 
-    for key, judged in sorted(current.items()):
-        body = _body(judged)
+    for key, (title, body) in sorted(wanted.items()):
         issue = existing.get(key)
         if issue is None:
-            if record.raised >= limit:
+            if record.raised >= limit and key not in exempt:
                 # Left for the next run rather than dropped or merged into one issue: a finding
                 # squeezed into somebody else's issue is a finding that loses its own key, and one
                 # dropped silently is one nobody knows was found.
@@ -106,9 +114,7 @@ def _track(
                     Posted("deferred", key, f"this run's limit of {limit} new issue(s) is reached")
                 )
                 continue
-            opened = platform.raise_issue(
-                NewIssue(key=key, title=_title(judged), body=body), label=label
-            )
+            opened = platform.raise_issue(NewIssue(key=key, title=title, body=body), label=label)
             record.raised += 1
             record.numbers[key] = opened.number
             record.posted.append(Posted("raised", key, opened.reference))
@@ -121,7 +127,7 @@ def _track(
             record.posted.append(Posted("unchanged", key))
 
     for key, issue in sorted(existing.items()):
-        if key in current:
+        if key in wanted:
             continue
         reason = unproven(key, outcomes)
         if reason is not None:
@@ -198,6 +204,11 @@ def _closing_note(key: str, head: str) -> str:
     difference matters most to whoever reads the issue a month later.
     """
     capability = key.split(":", 1)[0]
+    if ":failure:" in key:
+        return (
+            f"`{capability}` ran to completion on {head[:12]}, so the failure this issue reports "
+            "is over and it is closed. What that check covers is watched again from this run on."
+        )
     return (
         f"`{capability}` ran to completion on {head[:12]} and this is no longer among its "
         "findings, so this issue is closed. If it returns, a later run opens a new issue with the "
