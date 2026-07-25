@@ -112,6 +112,14 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   an action's publish date comes from the platform API with the tag-without-a-release case covered, the
   image registry hosts are named rather than described, and the contract says what an absent target
   means — a pin with nowhere to move is reported, not fixed.
+- Every place the agent writes resolves a relative path against the repository it is working on, the
+  run record included, and `git worktree add` is given an absolute path regardless. It had two rules:
+  the caches followed the repository and `--run-dir` followed whoever typed the command. In CI those
+  are the same directory, so nothing ever disagreed. Run by hand from the agent's own checkout they
+  disagreed silently — git resolved the worktree path from the repository, the agent resolved it from
+  its working directory, both directories were created, and the fix went into the one nobody looks at.
+  The run then died on `git status` in a directory that was not there, after paying for every session
+  in it.
 - A finding about a package identifies itself by what is wrong — `quarantine`, `floating`, `outdated`,
   `bundle`, `vulnerable` — instead of by a slug of its summary. The summary is prose a model writes
   afresh every run, and the second live maintenance run proved what that costs: all four findings were

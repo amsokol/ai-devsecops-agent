@@ -4,11 +4,12 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from agent.cli import main
 from agent.domain import Trigger
 from agent.errors import ExitCode
 from agent.orchestrator import Request, RunRecord, run
-from agent.repo import Repository
+from agent.repo import Repository, Worktree
 from agent.scm.fake import FakePlatform
 from agent.wake import Wake
 
@@ -130,6 +131,63 @@ def test_a_maintenance_run_carries_a_fix_phase_even_when_there_is_nothing_to_fix
     assert [role["role"] for role in manifest["roles"]] == ["analyst", "fixer"]
     assert manifest["remediation"] == {"jobs": [], "deferred": []}
     assert manifest["fixes"] == []
+
+
+def test_a_relative_run_dir_is_under_the_repository_not_under_the_caller(
+    git_repo: Path,
+    library_root: Path,
+    overlay_root: Path,
+    config_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One rule for every place the agent writes, since `git -C` follows that one and not the
+    caller's.
+
+    Invoked from somewhere that is not the repository, a relative path used to mean two directories
+    at once: the run record went beside the caller while `git worktree add` put the fix beside the
+    repository. Both existed, and the agent looked in the empty one.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    code = main(
+        [
+            "maintain",
+            "--repo",
+            str(git_repo),
+            "--library",
+            str(library_root),
+            "--overlay",
+            str(overlay_root),
+            "--config-dir",
+            str(config_dir),
+            "--run-dir",
+            "records",
+            "--plan-only",
+        ]
+    )
+
+    assert code == int(ExitCode.OK)
+    assert list((git_repo / "records").glob("*/manifest.json"))
+    assert not (elsewhere / "records").exists()
+
+
+def test_a_worktree_is_created_where_the_agent_will_look_for_it(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git reads a relative worktree path from the repository; a caller need not know that."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    tree = Worktree.create(Repository.open(git_repo), branch="agent/probe", at=Path("trees/one"))
+    try:
+        assert tree.path.is_dir()
+        assert tree.dirty() == ()
+    finally:
+        tree.discard(keep_branch=False)
 
 
 def test_a_review_asked_to_publish_without_a_change_number_stops_before_it_starts(

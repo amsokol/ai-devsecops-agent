@@ -48,7 +48,7 @@ only take permission away.
 | --- | --- |
 | `--library` | the knowledge library artefact, unpacked; verified against the pin in `agent/config/library.yaml` |
 | `--overlay` | the product's overlay, default `<repo>/.devsecops`, holding `agent.yaml` and `NOTES.md` |
-| `--run-dir` | where run records are written, default `.agent/runs`; publish it as a CI artefact |
+| `--run-dir` | where run records are written, default `<repo>/.agent/runs`; publish it as a CI artefact |
 | `--config-dir` | replaces the built-in configuration wholesale |
 
 ## Which overlay a review obeys
@@ -109,6 +109,11 @@ Three kinds of persistence, separate because losing each one means something dif
 | cache of immutable facts | `.agent/cache`, a directory a CI cache can restore and save | only a run on the default branch |
 | what a verification command downloads | `.agent/tools`: the crate registry, the module cache, wheels | any run that verifies a fix |
 | agent state: which checks keep failing | the git ref named in `agent/config/storage.yaml` | only a scheduled run, and only when it changed |
+
+Every one of those paths, `--run-dir` included, is read relative to the repository being worked on when
+it is not absolute. One rule, because git has the same one: a relative worktree path is resolved from
+the repository, and a second rule based on the caller's working directory means the agent and git
+disagree about where a fix is while both of them are right.
 
 Only facts that cannot change are cached — a version's publication date, an artefact digest. Advisory
 data and version lists never are, or a weekly run would stop noticing new advisories, which is the

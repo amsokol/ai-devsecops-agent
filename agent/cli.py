@@ -138,7 +138,15 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=f"product overlay directory (default: <repo>/{DEFAULT_OVERLAY})",
     )
-    parser.add_argument("--run-dir", type=Path, default=Path(DEFAULT_RUN_DIR))
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=Path(DEFAULT_RUN_DIR),
+        help=(
+            f"where the run record goes; a relative path is under the repository (default: "
+            f"<repo>/{DEFAULT_RUN_DIR})"
+        ),
+    )
     parser.add_argument("--config-dir", type=Path, default=None, help="replace built-in config")
     parser.add_argument(
         "--plan-only",
@@ -197,7 +205,7 @@ def _request(arguments: argparse.Namespace) -> Request:
         repository=repository,
         library_path=arguments.library,
         overlay_path=arguments.overlay or repository / DEFAULT_OVERLAY,
-        run_dir=arguments.run_dir,
+        run_dir=_under(repository, arguments.run_dir),
         config_dir=arguments.config_dir,
         base=getattr(arguments, "base", None),
         change=getattr(arguments, "change", None),
@@ -209,6 +217,20 @@ def _request(arguments: argparse.Namespace) -> Request:
         use_cache=not arguments.no_cache,
         only=tuple(arguments.only or ()),
     )
+
+
+def _under(repository: Path, given: Path) -> Path:
+    """A place the agent writes, made absolute against the repository it is working on.
+
+    The same rule the caches follow, and now one rule instead of two. It was two, and the second one
+    was the working directory of whoever typed the command: in CI that is the repository, so nothing
+    ever disagreed, and on a laptop invoked from the agent's own checkout it disagreed silently. The
+    run record went to one repository while `git worktree add`, which takes its relative paths from
+    the repository it is given, put the fix in the other. Both existed. The agent then looked for a
+    fix in the tree that never had one and died on `git status` in a directory that was not there,
+    after paying for every session in the run.
+    """
+    return given if given.is_absolute() else (repository / given).resolve()
 
 
 def _wake(arguments: argparse.Namespace) -> Wake | None:

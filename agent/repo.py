@@ -170,6 +170,10 @@ class Worktree:
 
     @classmethod
     def create(cls, repository: Repository, *, branch: str, at: Path) -> Worktree:
+        # Absolute, because git runs with `-C repository` and reads a relative path from there while
+        # the agent reads it from its own working directory. Two directories, both created, and the
+        # fix in the one nobody looks at.
+        at = at if at.is_absolute() else at.resolve()
         at.parent.mkdir(parents=True, exist_ok=True)
         _git(
             repository.path,
@@ -181,7 +185,7 @@ class Worktree:
             str(at),
             repository.head,
         )
-        return cls(repository=repository.path, path=at.resolve(), branch=branch)
+        return cls(repository=repository.path, path=at, branch=branch)
 
     def dirty(self) -> tuple[str, ...]:
         """Paths the session changed, added or removed, as git sees them."""
