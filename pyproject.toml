@@ -31,6 +31,7 @@ package = true
 # asked for, at the worst possible moment.
 dev = [
     "mypy==2.3.0",
+    "pip-audit==2.10.1",
     "pytest==9.1.1",
     "ruff==0.16.0",
     "types-pyyaml==6.0.12.20260724",

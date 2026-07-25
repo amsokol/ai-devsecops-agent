@@ -22,10 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent.evidence.questions import CACHEABLE
 from agent.evidence.record import Evidence, Subject
-
-# Questions whose answer, once true, stays true.
-CACHEABLE_QUESTIONS = frozenset({"publish-time", "artifact-digest"})
 
 
 @dataclass(slots=True)
@@ -57,7 +55,7 @@ class FactCache:
         return self.root is not None
 
     def get(self, question: str, subject: Subject, *, recipe: str = "") -> Evidence | None:
-        if self.root is None or question not in CACHEABLE_QUESTIONS:
+        if self.root is None or question not in CACHEABLE:
             return None
         path = _path(self.root, question, subject)
         if not path.is_file():
@@ -80,7 +78,7 @@ class FactCache:
     def put(self, record: Evidence) -> bool:
         if self.root is None or not self.writable:
             return False
-        if record.question not in CACHEABLE_QUESTIONS or not record.is_verified:
+        if record.question not in CACHEABLE or not record.is_verified:
             self.stats.refused += 1
             return False
         if not _identifies_an_immutable_thing(record.subject):

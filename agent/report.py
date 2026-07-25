@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from agent.domain import RunResult, Trigger
 from agent.evidence import Reliability
-from agent.findings import Action
+from agent.findings import Action, Severity
 from agent.verdict import Judged, TaskOutcome, Verdict
+
+SEVERITY_ORDER = (Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL)
 
 HEADLINES = {
     RunResult.BLOCKED: "Changes requested",
@@ -42,14 +44,14 @@ def render(
     if verdict.blocking:
         lines.append("### Blocking")
         lines.append("")
-        lines += [_entry(item) for item in verdict.blocking]
+        lines += _entries(verdict.blocking)
         lines.append("")
 
     comments = tuple(item for item in verdict.judged if item.action is Action.COMMENT)
     if comments:
         lines.append("### Findings")
         lines.append("")
-        lines += [_entry(item) for item in comments]
+        lines += _entries(comments)
         lines.append("")
 
     if verdict.failed_tasks:
@@ -82,7 +84,21 @@ def render(
     return "\n".join(lines) + "\n"
 
 
-def _entry(item: Judged) -> str:
+def _entries(items: tuple[Judged, ...]) -> list[str]:
+    """One entry per subject, not per advisory.
+
+    Four advisories against one pin are one thing to do, and four near-identical paragraphs asking
+    for the same bump read as noise. The manifest keeps them separate, because each is its own
+    finding for the purpose of not reopening what a human already answered.
+    """
+    grouped: dict[str, list[Judged]] = {}
+    for item in items:
+        grouped.setdefault(item.finding.subject.key(), []).append(item)
+    return [_entry(group) for group in grouped.values()]
+
+
+def _entry(group: list[Judged]) -> str:
+    item = max(group, key=lambda judged: SEVERITY_ORDER.index(judged.finding.severity))
     finding = item.finding
     subject = finding.subject
     named = subject.package or subject.path or "—"
@@ -95,6 +111,15 @@ def _entry(item: Judged) -> str:
     headline = f"**{finding.severity.value}** `{finding.klass.value}` {named}{where}"
     text = f"- {headline} — {finding.summary}"
     text += f"\n  {finding.rationale}"
+    others = sorted(
+        {
+            other.finding.advisory
+            for other in group
+            if other.finding.advisory and other.finding.advisory != finding.advisory
+        }
+    )
+    if others:
+        text += f"\n  Same subject: {', '.join(others)}."
     if finding.remediation:
         text += f"\n  Remediation: {finding.remediation}"
     if item.capped:

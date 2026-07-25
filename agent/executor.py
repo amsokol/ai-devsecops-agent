@@ -185,7 +185,10 @@ async def _attempts(
 
         try:
             result = read_result(
-                result_path, capability=task.capability, known_evidence=evidence.keys()
+                result_path,
+                capability=task.capability,
+                known_evidence=evidence.keys(),
+                ecosystem=task.ecosystem,
             )
         except InvalidResult as error:
             attempt.rejected = str(error)

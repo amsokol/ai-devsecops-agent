@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any
 
 from agent.domain import PlannedTask, Reason
-from agent.evidence import Evidence, Origin, Subject
+from agent.evidence import Evidence, Origin, Question, Subject
 from agent.session import Session, TaskTools
 from agent.tools import (
     HostNotPermitted,
@@ -213,7 +213,7 @@ class Toolkit:
                     "immutable facts. Call this before acquiring anything expensive."
                 ),
                 schema=_schema(
-                    {"question": _string("stable question name"), "subject": _SUBJECT},
+                    {"question": _QUESTION, "subject": _SUBJECT},
                     required=["question", "subject"],
                 ),
                 run=self._known_fact,
@@ -227,7 +227,7 @@ class Toolkit:
                 ),
                 schema=_schema(
                     {
-                        "question": _string("stable question name, such as 'publish-time'"),
+                        "question": _QUESTION,
                         "subject": _SUBJECT,
                         "value": {"description": "the value obtained"},
                         "calls": {
@@ -248,7 +248,7 @@ class Toolkit:
                 ),
                 schema=_schema(
                     {
-                        "question": _string("stable question name"),
+                        "question": _QUESTION,
                         "subject": _SUBJECT,
                         "reason": {
                             "type": "string",
@@ -411,8 +411,8 @@ class Toolkit:
     # Evidence --------------------------------------------------------------------
 
     def _known_fact(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        question = _required(arguments, "question")
-        subject = _subject(arguments.get("subject"))
+        question = _question(arguments)
+        subject = self._subject(arguments.get("subject"))
         known = self._session.evidence.find(question, subject)
         if known is None:
             cached = self._session.cache.get(question, subject)
@@ -422,8 +422,8 @@ class Toolkit:
         return {"found": True, "key": known.key, "value": known.value, "source": known.source}
 
     def _record_fact(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        question = _required(arguments, "question")
-        subject = _subject(arguments.get("subject"))
+        question = _question(arguments)
+        subject = self._subject(arguments.get("subject"))
         cited = self._cited(arguments.get("calls"))
         if "value" not in arguments or arguments["value"] is None:
             raise Refused("a fact needs a value; if there is nothing to record, use record_gap")
@@ -441,8 +441,8 @@ class Toolkit:
         return {"key": stored.key, "reliability": stored.reliability.value}
 
     def _record_gap(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        question = _required(arguments, "question")
-        subject = _subject(arguments.get("subject"))
+        question = _question(arguments)
+        subject = self._subject(arguments.get("subject"))
         raw = _required(arguments, "reason")
         try:
             reason = Reason(raw)
@@ -481,6 +481,32 @@ class Toolkit:
         self._calls.append(call)
         return call
 
+    def _subject(self, raw: Any) -> Subject:
+        """Read a subject, and settle its ecosystem from the task rather than from the model.
+
+        A task runs for one ecosystem. Accepting `python-uv` in one record and
+        `ecosystems/python-uv` in the next would give one package two identities, and two identities
+        means a finding that reappears next week as a new one.
+        """
+        if not isinstance(raw, dict):
+            raise Refused("subject must be an object")
+        subject = Subject(
+            ecosystem=self.task.ecosystem or _optional(raw.get("ecosystem")),
+            package=_optional(raw.get("package")),
+            version=_optional(raw.get("version")),
+            path=_optional(raw.get("path")),
+        )
+        if not (subject.package or subject.path):
+            raise Refused("subject must name a package or a path")
+        if subject.package and subject.path:
+            # Otherwise the same fact about the same pin gets two keys depending on whether the
+            # manifest was mentioned, and neither the cache nor next week's run recognises either.
+            raise Refused(
+                "a subject names a package or a path, not both. For a package, the manifest it was "
+                "found in belongs in the finding's location, not in the subject"
+            )
+        return subject
+
     def _cited(self, raw: Any, *, required: bool = True) -> tuple[Call, ...]:
         if raw is None:
             raw = []
@@ -504,13 +530,24 @@ class Toolkit:
 
 _SUBJECT = {
     "type": "object",
-    "description": "what the fact is about: a package in an ecosystem, or a path in the repository",
+    "description": (
+        "what the fact is about: a package, or a path in the repository. The ecosystem is taken "
+        "from the task, so it does not need to be given"
+    ),
     "properties": {
-        "ecosystem": {"type": "string"},
         "package": {"type": "string"},
         "version": {"type": "string"},
         "path": {"type": "string"},
     },
+}
+
+_QUESTION = {
+    "type": "string",
+    "enum": sorted(question.value for question in Question),
+    "description": (
+        "which question this answers, from the fixed vocabulary. The same question must have the "
+        "same name in every run, which is what makes a fact reusable"
+    ),
 }
 
 
@@ -534,18 +571,13 @@ def _required(arguments: dict[str, Any], name: str) -> str:
     return value.strip()
 
 
-def _subject(raw: Any) -> Subject:
-    if not isinstance(raw, dict):
-        raise Refused("subject must be an object")
-    subject = Subject(
-        ecosystem=_optional(raw.get("ecosystem")),
-        package=_optional(raw.get("package")),
-        version=_optional(raw.get("version")),
-        path=_optional(raw.get("path")),
-    )
-    if not (subject.package or subject.path):
-        raise Refused("subject must name a package or a path")
-    return subject
+def _question(arguments: dict[str, Any]) -> str:
+    raw = _required(arguments, "question")
+    try:
+        return Question(raw).value
+    except ValueError:
+        known = ", ".join(sorted(question.value for question in Question))
+        raise Refused(f"{raw!r} is not a question this run asks. Use one of: {known}") from None
 
 
 def _optional(value: Any) -> str | None:

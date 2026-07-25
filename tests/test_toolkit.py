@@ -143,15 +143,48 @@ def test_a_recorded_fact_returns_a_key_a_finding_can_cite(tmp_path: Path) -> Non
     answer = kit.call(
         "record_fact",
         {
-            "question": "pinned-version",
+            "question": "declared-pin",
             "subject": SUBJECT,
             "value": "0.28.1",
             "calls": [identifier],
         },
     )
 
-    assert answer["key"] == "pinned-version|ecosystems/python-uv|httpx|0.28.1|"
+    assert answer["key"] == "declared-pin|ecosystems/python-uv|httpx|0.28.1|"
     assert answer["reliability"] == Reliability.REPRODUCIBLE.value
+
+
+def test_an_invented_question_is_refused(tmp_path: Path) -> None:
+    kit = toolkit(tmp_path)
+    identifier = a_call(kit, tmp_path)
+
+    with pytest.raises(Refused, match="not a question this run asks"):
+        kit.call(
+            "record_fact",
+            {
+                "question": "pip-audit vulnerabilities in httpx 0.28.1",
+                "subject": SUBJECT,
+                "value": [],
+                "calls": [identifier],
+            },
+        )
+
+
+def test_the_ecosystem_of_a_subject_comes_from_the_task(tmp_path: Path) -> None:
+    kit = toolkit(tmp_path)
+    identifier = a_call(kit, tmp_path)
+
+    answer = kit.call(
+        "record_fact",
+        {
+            "question": "advisories",
+            "subject": {"ecosystem": "python-uv", "package": "httpx"},
+            "value": [],
+            "calls": [identifier],
+        },
+    )
+
+    assert answer["key"] == "advisories|ecosystems/python-uv|httpx||"
 
 
 def test_a_fact_needs_a_value(tmp_path: Path) -> None:
@@ -175,6 +208,22 @@ def test_a_subject_must_name_a_package_or_a_path(tmp_path: Path) -> None:
             {
                 "question": "advisories",
                 "subject": {"ecosystem": "ecosystems/npm"},
+                "value": [],
+                "calls": [identifier],
+            },
+        )
+
+
+def test_a_subject_is_a_package_or_a_path_but_not_both(tmp_path: Path) -> None:
+    kit = toolkit(tmp_path)
+    identifier = a_call(kit, tmp_path)
+
+    with pytest.raises(Refused, match="not both"):
+        kit.call(
+            "record_fact",
+            {
+                "question": "advisories",
+                "subject": {"package": "httpx", "version": "0.28.1", "path": "pyproject.toml"},
                 "value": [],
                 "calls": [identifier],
             },
@@ -242,14 +291,14 @@ def test_a_known_fact_is_reported_instead_of_reacquired(tmp_path: Path) -> None:
     kit.call(
         "record_fact",
         {
-            "question": "pinned-version",
+            "question": "declared-pin",
             "subject": SUBJECT,
             "value": "0.28.1",
             "calls": [identifier],
         },
     )
 
-    answer = kit.call("known_fact", {"question": "pinned-version", "subject": SUBJECT})
+    answer = kit.call("known_fact", {"question": "declared-pin", "subject": SUBJECT})
 
     assert answer["found"] is True
     assert answer["value"] == "0.28.1"

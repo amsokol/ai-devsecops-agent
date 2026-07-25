@@ -26,7 +26,8 @@ same:
 1. `known_fact` first — the run may already have the answer, and a repeat call buys nothing.
 2. Acquire it: run a command, or fetch a URL. Every call returns a `call` identifier.
 3. `record_fact` with the question, the subject, the value and the identifiers of the calls it rests
-   on. It returns an evidence key.
+   on. It returns an evidence key. Questions come from a fixed list, because the same question has
+   to have the same name in every run for its answer to be worth keeping.
 4. Put that key in the finding's `evidence`.
 
 A key exists only because a call happened, so a finding you cannot support has nothing to cite and
@@ -47,7 +48,7 @@ RESULT_SHAPE = """\
     {
       "class": "security | routine",
       "severity": "critical | high | medium | low",
-      "subject": {"ecosystem": "...", "package": "...", "version": "...", "path": "..."},
+      "subject": {"package": "...", "version": "..."},
       "location": {"path": "path/to/file", "line": 42},
       "summary": "one sentence, addressed to the author",
       "rationale": "why it matters here, referring to the evidence",
@@ -65,7 +66,11 @@ Rules the validator enforces:
 
 * `reason` is required when `outcome` is `unverified`, and only those four values are accepted.
 * `clean` may not carry findings; `findings` requires at least one.
-* `subject` must name a `package` or a `path`. Fields you do not need are omitted, not left empty.
+* `subject` names a `package` or a `path`, never both, and its ecosystem is this task's, so it is
+  not given. The file a package was found in belongs in `location`. Fields you do not need are
+  omitted, not left empty.
+* one finding per problem. Four advisories against one pin are four findings, each with its own
+  `advisory`; the report groups them, and a human answering one of them does not silence the rest.
 * every entry in `evidence` must be a key a tool returned in this run.
 * no other fields are allowed anywhere in the file."""
 

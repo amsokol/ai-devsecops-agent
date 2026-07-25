@@ -56,13 +56,23 @@ class TaskResult:
     notes: str = ""
 
 
-def read_result(path: Path, *, capability: str, known_evidence: frozenset[str]) -> TaskResult:
+def read_result(
+    path: Path,
+    *,
+    capability: str,
+    known_evidence: frozenset[str],
+    ecosystem: str | None = None,
+) -> TaskResult:
     """Parse and validate one task's result file.
 
     `known_evidence` is the set of records the run actually collected. A finding citing anything
     else invalidates the result rather than being quietly downgraded: a citation that points at
     nothing is either a fabrication or a bug, and both deserve a second attempt and a loud record,
     not a comment posted under a reference no one can follow.
+
+    `ecosystem` settles the subject's ecosystem the same way the tools do. A finding's key has to
+    mean the same thing across runs, and it cannot if one run spells the ecosystem `python-uv` and
+    the next spells it `ecosystems/python-uv`.
     """
     if not path.is_file():
         raise InvalidResult(f"{path} was not written")
@@ -95,7 +105,14 @@ def read_result(path: Path, *, capability: str, known_evidence: frozenset[str]) 
 
     listed = _list(raw.get("findings"), path=path, field_name="findings")
     findings = tuple(
-        _finding(item, path=path, position=position, capability=capability, known=known_evidence)
+        _finding(
+            item,
+            path=path,
+            position=position,
+            capability=capability,
+            known=known_evidence,
+            ecosystem=ecosystem,
+        )
         for position, item in enumerate(listed)
     )
     if outcome is Outcome.CLEAN and findings:
@@ -112,7 +129,13 @@ def read_result(path: Path, *, capability: str, known_evidence: frozenset[str]) 
 
 
 def _finding(
-    raw: Any, *, path: Path, position: int, capability: str, known: frozenset[str]
+    raw: Any,
+    *,
+    path: Path,
+    position: int,
+    capability: str,
+    known: frozenset[str],
+    ecosystem: str | None,
 ) -> Finding:
     where = f"{path}: findings[{position}]"
     if not isinstance(raw, dict):
@@ -133,7 +156,7 @@ def _finding(
         capability=str(raw.get("capability") or capability),
         klass=_enum(Klass, raw.get("class"), path=path, field_name=f"{where} class"),
         severity=_enum(Severity, raw.get("severity"), path=path, field_name=f"{where} severity"),
-        subject=_subject(raw.get("subject"), where=where),
+        subject=_subject(raw.get("subject"), where=where, ecosystem=ecosystem),
         summary=summary,
         rationale=rationale,
         evidence=evidence,
@@ -145,20 +168,24 @@ def _finding(
     )
 
 
-def _subject(raw: Any, *, where: str) -> Subject:
+def _subject(raw: Any, *, where: str, ecosystem: str | None = None) -> Subject:
     if not isinstance(raw, dict):
         raise InvalidResult(f"{where}: subject must be an object")
     unknown = sorted(raw.keys() - _SUBJECT_KEYS)
     if unknown:
         raise InvalidResult(f"{where}: subject has unknown field(s) {', '.join(unknown)}")
     subject = Subject(
-        ecosystem=_optional(raw.get("ecosystem")),
+        ecosystem=ecosystem or _optional(raw.get("ecosystem")),
         package=_optional(raw.get("package")),
         version=_optional(raw.get("version")),
         path=_optional(raw.get("path")),
     )
     if not (subject.package or subject.path):
         raise InvalidResult(f"{where}: subject must name a package or a path")
+    if subject.package and subject.path:
+        raise InvalidResult(
+            f"{where}: subject names a package or a path, not both. The file belongs in `location`"
+        )
     return subject
 
 

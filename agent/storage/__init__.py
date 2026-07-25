@@ -4,6 +4,6 @@ Three homes, because losing each one means something different: the run record i
 cache only costs time, and losing state changes behaviour.
 """
 
-from agent.storage.cache import CACHEABLE_QUESTIONS, CacheStats, FactCache
+from agent.storage.cache import CacheStats, FactCache
 
 __all__ = ["CACHEABLE_QUESTIONS", "CacheStats", "FactCache"]
