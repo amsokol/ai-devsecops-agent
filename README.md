@@ -82,6 +82,11 @@ separately in the manifest rather than as zero, because a total that quietly omi
 limit. There is no money ceiling: it needs a price per model, and a limit computed from prices nobody
 maintains would refuse work for a wrong number.
 
+The shipped ceiling is a guard against a run that stopped making progress, not a tight cap. For
+scale, a measured four-task review of a small change costs about 3M tokens and 57 seconds with four
+sessions overlapping; the ceiling sits several times above that, because a limit that bites on a
+large change would turn real analysis into `exhausted` and teach the team to distrust the gate.
+
 ## Status
 
 Stage 4: concurrency and budgets are in place on top of the decision path, the tool registry and the

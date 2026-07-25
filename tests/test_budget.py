@@ -207,8 +207,23 @@ def test_a_scheduled_run_is_given_less_than_a_reviewed_one() -> None:
     scheduled = execution.budget_for(Trigger.MAINTAIN_SCHEDULED)
     assert scheduled.task_seconds < interactive.task_seconds
     assert scheduled.max_parallel <= interactive.max_parallel
-    # Omitted keys are inherited, so a tightened section states only its differences.
-    assert scheduled.run_tokens == interactive.run_tokens
+    assert interactive.run_tokens is not None
+    assert scheduled.run_tokens is not None
+    assert scheduled.run_tokens < interactive.run_tokens
+
+
+def test_a_tightened_section_states_only_its_differences(tmp_path: Path) -> None:
+    """Otherwise changing one knob means restating the rest, and one copy drifts from the other."""
+    directory = tmp_path / "config"
+    shutil.copytree(BUILTIN_CONFIG_DIR, directory)
+    (directory / "execution.yaml").write_text(
+        "backend: fake\nmodel: none\nbudget:\n  task_seconds: 800\n  task_steps: 90\n"
+        "  max_parallel: 3\n  run_tokens: 9\nscheduled_budget:\n  max_parallel: 1\n",
+        encoding="utf-8",
+    )
+    scheduled = Config.load(directory).execution.budget_for(Trigger.MAINTAIN_SCHEDULED)
+    assert scheduled.max_parallel == 1
+    assert (scheduled.task_seconds, scheduled.task_steps, scheduled.run_tokens) == (800, 90, 9)
 
 
 def test_a_budget_that_makes_no_sense_stops_the_run(tmp_path: Path) -> None:

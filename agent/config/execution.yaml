@@ -28,11 +28,19 @@ budget:
   # Shared token ceiling for the whole run. When it is spent, tasks that have not started end as
   # `exhausted` and the run is inconclusive; tasks already in flight finish. Only enforceable where
   # the backend reports usage — a run whose backend reports nothing is limited by time and steps.
-  # run_tokens: 6000000
+  #
+  # A guard against a run that has stopped making progress, not a tight cap. A measured four-task
+  # review of a small change costs about 3M, and a large change legitimately costs several times
+  # that; a ceiling that bit there would turn real analysis into `exhausted`, which refuses the merge
+  # and teaches the team to distrust the gate. This number is loose enough for a big change and still
+  # catches the runaway that would otherwise cost an order of magnitude more.
+  run_tokens: 24000000
 
-# A scheduled run has nobody watching it while it spends, so it gets less. Keys omitted here are
-# inherited from `budget` above, which is why only the differences are listed.
+# A scheduled run has nobody watching it while it spends, so it gets less: a configuration mistake
+# should not turn into a surprise invoice discovered a week later. Keys omitted here are inherited
+# from `budget` above, which is why only the differences are listed.
 scheduled_budget:
   task_seconds: 600
   task_steps: 80
   max_parallel: 2
+  run_tokens: 12000000
