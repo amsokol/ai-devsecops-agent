@@ -21,7 +21,7 @@ from agent.backends.fake import FakeBackend, Scripted
 from agent.backends.port import Brief
 from agent.domain import Outcome, Reason, Role, RunResult, Trigger
 from agent.evidence import Reliability, Subject
-from agent.findings import Action, Finding, Klass, Location, Severity, slug
+from agent.findings import Action, Finding, Kind, Klass, Location, Severity
 from agent.issues import track_findings
 from agent.library import Library
 from agent.orchestrator import Request, run
@@ -38,7 +38,7 @@ from agent.wake import Wake
 PERSON = "amsokol"
 COMMENT = 11
 SUMMARY = "jinja2 is a major line behind."
-KEY = f"capabilities/deps-outdated:ecosystems/python-uv:jinja2:{slug(SUMMARY)}"
+KEY = "capabilities/deps-outdated:ecosystems/python-uv:jinja2:outdated"
 VERIFY = ("uv", "--version")
 APPROVAL = Approval(by=PERSON, comment=COMMENT, at="2026-07-25")
 
@@ -64,6 +64,7 @@ def a_finding(
         location=Location(path="pyproject.toml", line=2),
         target=target,
         needs_unlock=needs_unlock,
+        kind=Kind.OUTDATED,
     )
 
 
@@ -335,6 +336,7 @@ def _reported(evidence: str) -> dict[str, Any]:
                 "evidence": [evidence],
                 "remediation": "Move the pin to 3.1.4.",
                 "target": "3.1.4",
+                "kind": "outdated",
             }
         ],
     }

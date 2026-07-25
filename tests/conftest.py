@@ -19,7 +19,7 @@ from agent.overlay import Overlay
 LIBRARY_YAML = """\
 schema: 1
 version: 0.1.0
-contract_version: 1
+contract_version: 2
 min_agent_version: 0.1.0
 """
 

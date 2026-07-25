@@ -58,6 +58,7 @@ RESULT_SHAPE = """\
       "advisory": "advisory identifier, for dependency findings",
       "symbol": "enclosing function or type, for code findings",
       "forbidden_state": false,
+      "kind": "quarantine | floating | outdated | bundle | vulnerable, for a package",
       "target": "the version the remediation moves to, for a version move",
       "needs_unlock": false
     }
@@ -77,8 +78,16 @@ Rules the validator enforces:
 * one finding per problem. Four advisories against one pin are four findings, each with its own
   `advisory`; the report groups them, and a human answering one of them does not silence the rest.
 * every entry in `evidence` must be a key a tool returned in this run.
+* `kind` is required for a finding about a package, and it is what the problem is *called*, not how
+  you worded it: `quarantine` for a version inside the window, `floating` for a reference that is
+  not a concrete version, `outdated` for a newer cleared release, `bundle` for members that
+  disagree, `vulnerable` for an advisory. The finding's identity is built from it, so the same
+  problem next week must arrive under the same word or it becomes a second issue beside the first.
 * `target` is the version the remediation moves to. Give it whenever there is one: the agent
   measures the size of the move itself, and a move it cannot measure is one it cannot hold back.
+  When there is nowhere to move yet — the newest release is still inside quarantine — leave it out
+  rather than naming the current version or a lower one. The finding is then reported and not fixed,
+  which is the truth; a session asked to fix a pin that cannot move invents a move.
 * `needs_unlock` is for a change that a person must approve before it ships, as the knowledge
   defines that. Set it for the majors no comparison can see — a floating action pin, a raised
   toolchain or language floor, a runtime image tag. A plain semantic-version major needs no flag:

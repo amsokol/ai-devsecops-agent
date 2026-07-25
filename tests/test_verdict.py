@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent.domain import Outcome, Reason, RunResult, Trigger
 from agent.evidence import Reliability, Subject
-from agent.findings import Action, Finding, Klass, Location, Severity, merge
+from agent.findings import Action, Finding, Kind, Klass, Location, Severity, merge
 from agent.policy import BlockingRules
 from agent.report import render
 from agent.verdict import TaskOutcome, decide, judge
@@ -45,6 +45,21 @@ def dependency(
     )
 
 
+def pin(
+    *, kind: Kind, summary: str = "actions/checkout is pinned to a moving reference."
+) -> Finding:
+    return Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.LOW,
+        subject=Subject(ecosystem="ecosystems/github-actions", package="actions/checkout"),
+        summary=summary,
+        rationale="The reference does not name a released version.",
+        evidence=(TOOL,),
+        kind=kind,
+    )
+
+
 def code(*, line: int, summary: str = "Unchecked index access can panic.") -> Finding:
     return Finding(
         capability="capabilities/code-quality",
@@ -68,6 +83,30 @@ def test_a_key_ignores_what_drifts_between_runs() -> None:
     assert dependency(version="0.28.1").key == dependency(version="0.29.0").key
     assert code(line=10).key == code(line=99).key
     assert code(line=10).key != code(line=10, summary="Something else entirely.").key
+
+
+def test_a_pin_keeps_its_key_when_the_wording_changes() -> None:
+    """The second live maintenance run reworded four summaries and raised four duplicate issues.
+
+    One of them carried an approval a person had given, which no longer matched anything, so the
+    agent asked them for it again.
+    """
+    first = pin(
+        kind=Kind.QUARANTINE, summary="actions/checkout@v7 resolves to a quarantined v7.0.1."
+    )
+    reworded = pin(
+        kind=Kind.QUARANTINE,
+        summary="The actions/checkout@v7 pin resolves to v7.0.1, in quarantine.",
+    )
+
+    assert first.key == reworded.key
+    assert first.key.endswith(":quarantine")
+
+
+def test_two_problems_with_one_pin_stay_two_findings() -> None:
+    """Being stable is not being coarse: a floating reference and a quarantined version are not the
+    same problem, and merging them would silence whichever was reported second."""
+    assert pin(kind=Kind.QUARANTINE).key != pin(kind=Kind.FLOATING).key
 
 
 def test_one_problem_found_twice_is_judged_by_the_stricter_verdict() -> None:

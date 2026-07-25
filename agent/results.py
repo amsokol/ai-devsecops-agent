@@ -17,7 +17,7 @@ from typing import Any
 
 from agent.domain import AnswerOutcome, FixOutcome, Intent, Outcome, Reason
 from agent.evidence import Subject
-from agent.findings import Finding, Klass, Location, Severity
+from agent.findings import Finding, Kind, Klass, Location, Severity
 
 # Reasons a subagent may state. The others describe what the agent itself concluded, and a task
 # claiming one of those would be describing a decision it does not make.
@@ -44,6 +44,7 @@ _FINDING_KEYS = frozenset(
         "forbidden_state",
         "target",
         "needs_unlock",
+        "kind",
     }
 )
 _SUBJECT_KEYS = frozenset({"ecosystem", "package", "version", "path"})
@@ -269,11 +270,12 @@ def _finding(
         raise InvalidResult(
             f"{where}: evidence {', '.join(unknown_records)} was never recorded by this run"
         )
+    subject = _subject(raw.get("subject"), where=where, ecosystem=ecosystem)
     return Finding(
         capability=str(raw.get("capability") or capability),
         klass=_enum(Klass, raw.get("class"), path=path, field_name=f"{where} class"),
         severity=_enum(Severity, raw.get("severity"), path=path, field_name=f"{where} severity"),
-        subject=_subject(raw.get("subject"), where=where, ecosystem=ecosystem),
+        subject=subject,
         summary=summary,
         rationale=rationale,
         evidence=evidence,
@@ -284,7 +286,27 @@ def _finding(
         forbidden_state=bool(raw.get("forbidden_state", False)),
         target=str(raw.get("target") or "").strip(),
         needs_unlock=bool(raw.get("needs_unlock", False)),
+        kind=_kind(raw.get("kind"), where=where, path=path, packaged=bool(subject.package)),
     )
+
+
+def _kind(raw: Any, *, where: str, path: Path, packaged: bool) -> Kind | None:
+    """The problem's name, required of a finding about a package because the key rests on it.
+
+    Refused rather than guessed, and refused loudly: a missing one sends the task back with the list
+    of words it may use, which costs one retry. Accepting it silently costs a duplicate issue every
+    time the summary is worded differently, and the person who approved the old one is asked again.
+    """
+    named = str(raw or "").strip()
+    if not named:
+        if not packaged:
+            return None
+        allowed = ", ".join(item.value for item in Kind)
+        raise InvalidResult(
+            f"{where}: a finding about a package must name its kind, one of: {allowed}. The key "
+            "is built from it, and a key built from the summary moves whenever the wording does"
+        )
+    return _enum(Kind, named, path=path, field_name=f"{where} kind")
 
 
 def _subject(raw: Any, *, where: str, ecosystem: str | None = None) -> Subject:
@@ -319,15 +341,15 @@ def _location(raw: Any, *, where: str) -> Location | None:
     return Location(path=str(raw["path"]), line=int(line) if line is not None else None)
 
 
-def _enum[T: (Outcome, FixOutcome, AnswerOutcome, Intent, Reason, Klass, Severity)](
-    kind: type[T], value: Any, *, path: Path, field_name: str
+def _enum[T: (Outcome, FixOutcome, AnswerOutcome, Intent, Reason, Klass, Severity, Kind)](
+    named: type[T], value: Any, *, path: Path, field_name: str
 ) -> T:
     if value is None:
         raise InvalidResult(f"{path}: {field_name} is required")
     try:
-        return kind(value)
+        return named(value)
     except ValueError:
-        known = ", ".join(str(item.value) for item in kind)
+        known = ", ".join(str(item.value) for item in named)
         raise InvalidResult(f"{path}: {field_name} {value!r} is not one of {known}") from None
 
 

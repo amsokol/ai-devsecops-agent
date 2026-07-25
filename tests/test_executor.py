@@ -100,6 +100,7 @@ def finding() -> dict[str, object]:
         "rationale": "The advisory covers the pinned version.",
         "evidence": ["advisories|ecosystems/python-uv|httpx|0.28.1|"],
         "advisory": "GHSA-xxxx",
+        "kind": "vulnerable",
     }
 
 
