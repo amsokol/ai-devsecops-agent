@@ -1,0 +1,30 @@
+# Which tasks exist when reviewing a proposed change, and when each one runs.
+#
+# Conditions are computed from the diff and the enabled ecosystems. No model participates: for
+# "a change was opened" the task set is a function of the diff, and spending a model call on it
+# would add latency, cost and nondeterminism to a blocking check.
+
+playbook: playbooks/pr-review
+
+triggers:
+  - change-opened
+  - change-updated
+
+# Split a capability into per-directory shards only when its prepared context exceeds this size.
+# The split is a function of the diff, so the same input always shards the same way.
+split_threshold_bytes: 400000
+
+tasks:
+  - capability: capabilities/code-quality
+    when: source-changed
+
+  - capability: capabilities/code-vuln
+    when: source-or-workflows-changed
+
+  - capability: capabilities/deps-outdated
+    when: ecosystem-pins-changed
+    per_ecosystem: true
+
+  - capability: capabilities/deps-vuln
+    when: ecosystem-pins-changed
+    per_ecosystem: true

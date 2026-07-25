@@ -1,0 +1,11 @@
+# Which knowledge library this agent expects.
+#
+# A release pins both, and a mismatch is a startup error: a gate that runs on unverified knowledge
+# cannot say what it checked. Both empty means "accept whatever is at --library", which is for local
+# work only — the run manifest records that the library was unpinned.
+#
+# The digest covers identity, index and document bodies, not the directory, so a checkout of the tag
+# and the unpacked release artefact verify the same. Take it with: agent pin --library <path>
+
+version: 0.1.1
+digest: sha256:88d35eacaace13dc890ab019df3ee88241ff74c165015b621323c571c371624b

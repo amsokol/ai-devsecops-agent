@@ -1,0 +1,11 @@
+# Defaults the overlay may narrow or widen, and limits the overlay cannot touch.
+
+# Applied to a scheduled maintenance run when the overlay is silent. Reaching a limit defers
+# findings to the next run; it never drops them.
+maintenance:
+  open_change_requests: 3
+  new_issues_per_run: 5
+
+# The overlay's NOTES.md enters every task's context, so its size is paid for continuously.
+# Exceeding this is a warning, not an error: the run is still correct, only more expensive.
+overlay_notes_characters: 8000

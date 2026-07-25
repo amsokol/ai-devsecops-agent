@@ -1,0 +1,17 @@
+# Where the three kinds of persistence live. They are separate because losing each one means
+# something different: the run record is audit, the cache only costs time, state changes behaviour.
+
+# Immutable facts, keyed by ecosystem, package and version. In CI this path is what the platform
+# cache restores and saves; a miss is normal and never an error.
+fact_cache:
+  path: .agent/cache
+  enabled: true
+
+# Counters the agent must remember between runs, such as consecutive failures of one source. Kept in
+# a dedicated ref so it survives cache eviction, leaves the default branch untouched, and still has
+# a history someone can read.
+state:
+  ref: refs/agent/state
+
+# The run record is written under --run-dir and published as a CI artefact. Retention is the
+# platform's default: this file names no duration so that nothing here contradicts the pipeline.

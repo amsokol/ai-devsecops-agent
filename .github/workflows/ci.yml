@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, types, tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Installed from PyPI at an exact version rather than through a third-party action: fewer
+      # parties in the supply chain, and the version cannot drift between runs.
+      - name: Install uv
+        run: pipx install uv==0.11.29
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: CLI help
+        run: uv run agent --help
+
+      - name: Markdown lint
+        run: npx --yes markdownlint-cli2@0.23.1 "**/*.md"

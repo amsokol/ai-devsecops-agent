@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agent run records and locally vendored knowledge library
+.agent/
+/library/

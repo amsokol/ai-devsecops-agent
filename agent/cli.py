@@ -1,0 +1,159 @@
+"""Command line: one command with subcommands, usable in CI and locally.
+
+Nothing here is interactive. A run happens in CI, so a prompt for confirmation would be a
+configuration error rather than a pause.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from agent import __version__
+from agent.domain import Trigger
+from agent.errors import AgentError, ExitCode
+from agent.library import Library
+from agent.manifest import read_manifest
+from agent.orchestrator import Request, RunRecord, run
+
+DEFAULT_OVERLAY = ".devsecops"
+DEFAULT_RUN_DIR = ".agent/runs"
+DEFAULT_LIBRARY = "library"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agent", description=__doc__.splitlines()[0])
+    parser.add_argument("--version", action="version", version=__version__)
+    subcommands = parser.add_subparsers(dest="command", required=True)
+
+    review = subcommands.add_parser("review", help="review a proposed change and produce a verdict")
+    _add_common(review)
+    review.add_argument("--change", type=int, help="change request number in the hosting platform")
+    review.add_argument("--base", default="main", help="branch the change is proposed against")
+    review.add_argument(
+        "--trigger",
+        choices=[Trigger.CHANGE_OPENED.value, Trigger.CHANGE_UPDATED.value],
+        default=Trigger.CHANGE_OPENED.value,
+    )
+
+    maintain = subcommands.add_parser("maintain", help="maintain the default branch")
+    _add_common(maintain)
+    maintain.add_argument("--wake-issue", type=int, help="issue whose comment woke this run")
+    maintain.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="this run came from a schedule, so the restraint rules for unattended runs apply",
+    )
+
+    explain = subcommands.add_parser("explain", help="show a recorded run")
+    explain.add_argument("--run", required=True, help="run identifier")
+    explain.add_argument("--run-dir", type=Path, default=Path(DEFAULT_RUN_DIR))
+
+    pin = subcommands.add_parser(
+        "pin",
+        help="print the version and digest of a library, in the form the pin file expects",
+    )
+    pin.add_argument("--library", type=Path, default=Path(DEFAULT_LIBRARY))
+
+    return parser
+
+
+def _add_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--repo", type=Path, default=Path.cwd(), help="target repository")
+    parser.add_argument(
+        "--library",
+        type=Path,
+        default=Path(DEFAULT_LIBRARY),
+        help="knowledge library artefact, unpacked",
+    )
+    parser.add_argument(
+        "--overlay",
+        type=Path,
+        default=None,
+        help=f"product overlay directory (default: <repo>/{DEFAULT_OVERLAY})",
+    )
+    parser.add_argument("--run-dir", type=Path, default=Path(DEFAULT_RUN_DIR))
+    parser.add_argument("--config-dir", type=Path, default=None, help="replace built-in config")
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="build and print the plan without executing tasks; claims nothing about the code",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="ignore the cache of immutable facts, to prove a verdict reproduces without it",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the manifest instead of a summary"
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    try:
+        if arguments.command == "explain":
+            print(json.dumps(read_manifest(arguments.run_dir, arguments.run), indent=2))
+            return int(ExitCode.OK)
+        if arguments.command == "pin":
+            # One implementation of the digest, in the code that verifies it. A second one on the
+            # library side would eventually disagree, and then nobody could say which was right.
+            library = Library.load(arguments.library, agent_version=__version__)
+            print(f"version: {library.identity.version}")
+            print(f"digest: {library.digest}")
+            return int(ExitCode.OK)
+        record = run(_request(arguments))
+    except AgentError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return int(error.exit_code)
+    if arguments.json:
+        print(json.dumps(record.manifest.as_json(), indent=2, ensure_ascii=False))
+    else:
+        _print_summary(record)
+    return int(record.exit_code)
+
+
+def _request(arguments: argparse.Namespace) -> Request:
+    trigger = (
+        (Trigger.MAINTAIN_SCHEDULED if arguments.scheduled else Trigger.MAINTAIN_REQUESTED)
+        if arguments.command == "maintain"
+        else Trigger(arguments.trigger)
+    )
+    repository = arguments.repo.resolve()
+    return Request(
+        trigger=trigger,
+        repository=repository,
+        library_path=arguments.library,
+        overlay_path=arguments.overlay or repository / DEFAULT_OVERLAY,
+        run_dir=arguments.run_dir,
+        config_dir=arguments.config_dir,
+        base=getattr(arguments, "base", None),
+        change=getattr(arguments, "change", None),
+        wake_issue=getattr(arguments, "wake_issue", None),
+        plan_only=arguments.plan_only,
+        use_cache=not arguments.no_cache,
+    )
+
+
+def _print_summary(record: RunRecord) -> None:
+    manifest = record.manifest
+    print(f"run {manifest.run_id}  {manifest.playbook}  trigger {manifest.trigger}")
+    print(f"library {manifest.library['version']} ({manifest.library['digest'][:19]}…)")
+    for task in manifest.tasks:
+        state = task.outcome.value if task.outcome else "planned"
+        reason = f" ({task.reason.value})" if task.reason else ""
+        print(f"  task {task.id:<28} {state}{reason}  scope: {len(task.scope)} path(s)")
+    for entry in manifest.skipped:
+        print(f"  n/a  {entry['capability']:<28} {entry['reason']}")
+    for warning in manifest.warnings:
+        print(f"  warning: {warning}")
+    print(f"result {manifest.result}  exit {int(record.exit_code)}")
+    print(f"manifest {record.manifest_path}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
