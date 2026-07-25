@@ -150,7 +150,47 @@ def runner(tmp_path: Path, *binaries: str) -> CommandRunner:
         grants=Grants(binaries=frozenset(binaries), hosts=frozenset()),
         workdir=tmp_path,
         scratch=tmp_path / "scratch",
+        tools=tmp_path / "tools",
     )
+
+
+def environment_of(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """What a command would be given, without running one."""
+    monkeypatch.setenv("AGENT_GITHUB_TOKEN", "s3cret")
+    monkeypatch.setenv("RUSTUP_HOME", "/opt/rustup")
+    monkeypatch.setenv("PATH", "/opt/toolchain/bin:/usr/bin")
+    return runner(tmp_path, "git")._environment()
+
+
+def test_a_command_is_told_where_the_toolchain_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without this, `cargo` finds no toolchain and Rust verification fails on the environment."""
+    environment = environment_of(tmp_path, monkeypatch)
+
+    assert environment["RUSTUP_HOME"] == "/opt/rustup"
+    assert environment["PATH"] == "/opt/toolchain/bin:/usr/bin"
+
+
+def test_a_command_downloads_into_the_agents_cache_not_a_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environment = environment_of(tmp_path, monkeypatch)
+
+    assert environment["CARGO_HOME"] == str(tmp_path / "tools" / "cargo")
+    assert environment["GOPATH"] == str(tmp_path / "tools" / "go")
+    assert environment["HOME"] == str(tmp_path / "scratch")
+    assert (tmp_path / "tools" / "cargo").is_dir()
+
+
+def test_no_credential_of_the_agents_reaches_a_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command may be running code that arrived in the change under review."""
+    environment = environment_of(tmp_path, monkeypatch)
+
+    assert "AGENT_GITHUB_TOKEN" not in environment
+    assert not any("s3cret" in value for value in environment.values())
 
 
 def test_only_granted_binaries_run(tmp_path: Path) -> None:

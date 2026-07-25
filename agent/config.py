@@ -210,6 +210,9 @@ class Storage:
 
     cache_path: Path | None
     state_ref: str
+    tool_path: Path
+    """Where a verification command may download what it needs to run, instead of into a home
+    directory it is not allowed to see."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,13 +288,17 @@ def _read_storage(directory: Path) -> Storage:
     raw = load_yaml_mapping(directory / "storage.yaml")
     cache = raw.get("fact_cache") or {}
     state = raw.get("state") or {}
-    if not isinstance(cache, dict) or not isinstance(state, dict):
-        raise ConfigError(f"{directory / 'storage.yaml'}: fact_cache and state must be mappings")
+    tools = raw.get("tool_cache") or {}
+    if not isinstance(cache, dict) or not isinstance(state, dict) or not isinstance(tools, dict):
+        raise ConfigError(
+            f"{directory / 'storage.yaml'}: fact_cache, tool_cache and state must be mappings"
+        )
     enabled = bool(cache.get("enabled", True))
     path = _optional_str(cache.get("path"))
     return Storage(
         cache_path=Path(path) if enabled and path else None,
         state_ref=str(state.get("ref") or "refs/agent/state"),
+        tool_path=Path(_optional_str(tools.get("path")) or ".agent/tools"),
     )
 
 

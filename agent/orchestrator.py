@@ -378,6 +378,7 @@ def run(
         scratch_root=run_directory / "scratch",
         never_send=config.never_send,
         reading_token=reading,
+        tool_cache=_tool_cache(request, config),
     )
 
     owned = backend is None
@@ -1206,6 +1207,13 @@ def _cost(models: list[dict[str, object]]) -> dict[str, object]:
         "sessions": len(models),
         "accounted_sessions": accounted,
     }
+
+
+def _tool_cache(request: Request, config: Config) -> Path:
+    """Resolved like the fact cache, and kept even when facts are not: `--no-cache` is about not
+    trusting a remembered answer, not about downloading the same crates a second time."""
+    path = config.storage.tool_path
+    return path if path.is_absolute() else request.repository / path
 
 
 def _cache_root(request: Request, config: Config) -> Path | None:

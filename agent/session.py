@@ -37,6 +37,7 @@ class Session:
         never_send: tuple[str, ...] = (),
         change: ChangeView | None = None,
         reading_token: str = "",
+        tool_cache: Path | None = None,
     ) -> None:
         self.repository = repository
         self.grants = grants
@@ -46,6 +47,9 @@ class Session:
         self.evidence = EvidenceStore()
         self._never_send = never_send
         self._scratch_root = scratch_root
+        self._tool_cache = tool_cache or scratch_root / "tools"
+        """Where a command may download what it needs. Falls back inside the run's own scratch,
+        which is correct but slow: nothing is reused, so every verification fetches the world."""
         self._reading_token = reading_token
         """The hosting platform's read credential, for the HTTP tool. Never for a command: the
         environment those get is built without it, because a command may be running code from the
@@ -63,7 +67,9 @@ class Session:
         tree = root or self.repository
         return TaskTools(
             files=FileTools(root=tree, never_send=self._never_send),
-            commands=CommandRunner(grants=self.grants, workdir=tree, scratch=scratch),
+            commands=CommandRunner(
+                grants=self.grants, workdir=tree, scratch=scratch, tools=self._tool_cache
+            ),
             http=HttpClient(grants=self.grants, token=self._reading_token),
             scratch=scratch,
         )

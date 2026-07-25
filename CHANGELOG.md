@@ -110,6 +110,15 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
 - The pinned knowledge library is `0.4.4`: acquisition recipes no longer send a session to a command
   that has to log in, an action's publish date comes from the platform API with the tag-without-a-release
   case covered, and the image registry hosts are named rather than described.
+- A command is told where the machine's toolchains live and given a cache of its own to download into,
+  instead of a `PATH` of three directories and a home nobody ever installed anything in. The first live
+  fix failed on that and nothing else: `cargo clippy` and `cargo test` answered "no default toolchain is
+  configured", which made verification — the thing that decides whether a fix ships — impossible to pass
+  on any Rust repository regardless of the change. `RUSTUP_HOME`, `GOROOT`, `JAVA_HOME` and their kin are
+  passed through when the agent has them; downloads land in `.agent/tools` rather than in a home
+  directory, since a crate registry in somebody's home may hold their publishing token. The rest is
+  unchanged: no credential of the agent's reaches a command, and its home directory still dies with the
+  task.
 
 - A status note on a woken issue now reports what the run actually did. It asked whether the owning
   check finished `clean`, which is the rule for *closing* an issue, so a recheck that found the

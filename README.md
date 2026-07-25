@@ -107,6 +107,7 @@ Three kinds of persistence, separate because losing each one means something dif
 | --- | --- | --- |
 | run record: manifest and evidence | `--run-dir`, published as a CI artefact | every run |
 | cache of immutable facts | `.agent/cache`, a directory a CI cache can restore and save | only a run on the default branch |
+| what a verification command downloads | `.agent/tools`: the crate registry, the module cache, wheels | any run that verifies a fix |
 | agent state: which checks keep failing | the git ref named in `agent/config/storage.yaml` | only a scheduled run, and only when it changed |
 
 Only facts that cannot change are cached — a version's publication date, an artefact digest. Advisory
@@ -116,6 +117,13 @@ a package.
 
 The state is separate from the cache on purpose. A cache may vanish and cost only time; the state
 decides whether a person is told something, so it must not depend on a runner keeping a directory.
+
+The tool cache exists because a command is not given a home directory to keep things in. Every command
+a task runs gets a built environment: the `PATH` and the toolchain locations the machine has, so a
+compiler can be found at all, a home directory of its own that dies with the task, and no credential
+of any kind. That last part is why the cache is named separately — a crate registry directory in a
+developer's home may hold their publishing token, and a check that verifies a dependency move has no
+business reading it.
 
 Exit codes are an interface, because CI acts on them: `0` permitted, `5` blocked, `6` inconclusive,
 `64` configuration error, `2` internal failure. A run that could not execute its tasks exits `6` and
