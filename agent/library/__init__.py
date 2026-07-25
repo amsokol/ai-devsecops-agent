@@ -7,6 +7,7 @@ from agent.library.loader import (
     Identity,
     Library,
     load_yaml_mapping,
+    parse_yaml_mapping,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "Identity",
     "Library",
     "load_yaml_mapping",
+    "parse_yaml_mapping",
 ]

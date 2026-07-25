@@ -69,7 +69,9 @@ def propose_fixes(
         if fix.outcome is not FixOutcome.FIXED or not fix.branch:
             continue
         try:
-            platform.push(path, fix.branch)
+            platform.push(
+                path, source=f"refs/heads/{fix.branch}", target=f"refs/heads/{fix.branch}"
+            )
         except ScmError as error:
             record.posted.append(Posted("not-pushed", fix.job.key, str(error)))
             continue
@@ -141,7 +143,7 @@ def _body(fix: Fix, *, issues: Mapping[str, int], run: str) -> str:
         lines += ["", "**Files.** " + ", ".join(f"`{name}`" for name in fix.changed)]
     lines += [
         "",
-        f"Prepared by the DevSecOps agent in run `{run}`. Merging is a human's decision: the agent "
-        "has no merge authority and does not ask for one.",
+        f"Prepared by `ai-devsecops-agent` in run `{run}`. Merging is a human's decision: the "
+        "agent has no merge authority and does not ask for one.",
     ]
     return marker.stamp("\n".join(lines), fix.job.key)

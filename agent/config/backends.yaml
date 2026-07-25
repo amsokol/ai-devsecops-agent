@@ -1,0 +1,16 @@
+# Settings for the adapters, for the things the agent is responsible for rather than the product.
+#
+# No models here, and no role bindings. Which backend and model answers for each role is stated by
+# the product in its overlay (`models:` in `agent.yaml`), together with what a run may spend. A
+# default here would be the agent choosing how somebody else's money is spent, and switching provider
+# would mean forking this directory and carrying that fork across every agent release.
+
+backends:
+  cursor:
+    # Confine the backend's own tools as well as ours. Not every machine can: a sandbox the
+    # environment refuses to provide makes every session fail to start, and turning this off is then
+    # a decision somebody made on purpose rather than a downgrade nobody noticed.
+    #
+    # Deliberately not settable from the overlay: a product may choose what it pays for, not how
+    # tightly the thing it pays for is confined.
+    sandbox: true

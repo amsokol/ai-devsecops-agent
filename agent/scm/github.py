@@ -381,8 +381,8 @@ class GitHub:
             )
         return tuple(found)
 
-    def push(self, path: Path, branch: str) -> None:
-        """Send the branch over HTTPS with the run's own credential, and never force.
+    def push(self, path: Path, *, source: str, target: str) -> None:
+        """Send the ref over HTTPS with the run's own credential, and never force.
 
         The token reaches git through a credential helper that reads it from the environment, so it
         appears in no command line: an argument is visible to every process on the machine, and a
@@ -408,7 +408,7 @@ class GitHub:
                 f"credential.helper=!{helper}",
                 "push",
                 f"https://github.com/{self.slug}.git",
-                f"refs/heads/{branch}:refs/heads/{branch}",
+                f"{source}:{target}",
             ],
             capture_output=True,
             text=True,
@@ -418,7 +418,7 @@ class GitHub:
         )
         if finished.returncode != 0:
             detail = finished.stderr.strip().splitlines()[-1:] or ["no reason given"]
-            raise ScmError(f"pushing {branch} failed: {detail[0]}")
+            raise ScmError(f"pushing {target} failed: {detail[0]}")
 
     def propose(self, new: NewChange) -> Proposal:
         got = self._api(
@@ -456,7 +456,7 @@ class GitHub:
                 body={
                     "name": label,
                     "color": "ededed",
-                    "description": "Raised by the DevSecOps agent",
+                    "description": "Raised by ai-devsecops-agent",
                 },
             )
         except ScmError as error:

@@ -37,6 +37,24 @@ from agent.verification import Surfaces
 
 NO_VERIFICATION = """\
 schema: 1
+review:
+  models:
+    analyst: fake/none
+  limits:
+    tokens_per_run: 9
+    minutes_per_task: 15
+    tasks_at_once: 4
+maintenance:
+  models:
+    analyst: fake/none
+    fixer: fake/none
+  limits:
+    tokens_per_run: 9
+    minutes_per_task: 10
+    tasks_at_once: 2
+  queue:
+    max_new_issues_per_run: 5
+    max_open_fix_requests: 3
 ecosystems:
   - ecosystems/python-uv
 hotspots:
@@ -89,7 +107,7 @@ def judged(
 
 def without_verification(root: Path, library: Library, overlay: Overlay) -> Overlay:
     (root / "agent.yaml").write_text(NO_VERIFICATION, encoding="utf-8")
-    return Overlay.load(root, library=library, default_limits=overlay.limits, notes_limit=100_000)
+    return Overlay.load(root, library=library, notes_limit=100_000)
 
 
 def test_a_branch_name_follows_the_subject_and_never_the_run_or_the_advisory() -> None:
@@ -121,7 +139,7 @@ def test_only_a_demonstrated_finding_with_a_remedy_is_fixed(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=5,
+        max_open_fix_requests=5,
     )
     assert [job.judged.finding.subject.package for job in queue.jobs] == ["requests"]
     deferred = dict(queue.deferred)
@@ -143,11 +161,11 @@ def test_security_is_queued_first_and_the_queue_has_a_ceiling(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=2,
+        max_open_fix_requests=2,
     )
     assert [job.judged.finding.subject.package for job in queue.jobs] == ["requests", "click"]
     assert (
-        "the queue allows 2 open change request(s)"
+        "the queue allows 2 open fix request(s)"
         in dict(queue.deferred)[
             judged(klass=Klass.ROUTINE, severity=Severity.LOW, package="rich").finding.key
         ]
@@ -169,7 +187,7 @@ def test_findings_on_one_subject_become_one_job(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=5,
+        max_open_fix_requests=5,
     )
     assert len(queue.jobs) == 2
     grouped = queue.jobs[0]
@@ -194,13 +212,11 @@ def test_a_full_queue_defers_a_whole_group(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=1,
+        max_open_fix_requests=1,
     )
     assert len(queue.jobs) == 1
     assert len(queue.deferred) == 2
-    assert all(
-        "the queue allows 1 open change request(s)" in reason for _, reason in queue.deferred
-    )
+    assert all("the queue allows 1 open fix request(s)" in reason for _, reason in queue.deferred)
 
 
 def test_a_subject_already_under_review_is_left_alone(
@@ -215,7 +231,7 @@ def test_a_subject_already_under_review_is_left_alone(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=5,
+        max_open_fix_requests=5,
         proposed=(branch_for(first),),
     )
     assert [job.judged.finding.subject.package for job in queue.jobs] == ["urllib3"]
@@ -232,7 +248,7 @@ def test_the_queue_counts_the_change_requests_already_open(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=1,
+        max_open_fix_requests=1,
         proposed=(branch_for(judged()),),
     )
     assert not queue.jobs
@@ -250,7 +266,7 @@ def test_without_verification_commands_nothing_can_be_fixed(
         overlay=bare,
         playbook="playbooks/maintain",
         repository=Repository.open(git_repo),
-        open_change_requests=5,
+        max_open_fix_requests=5,
     )
     assert queue.jobs == ()
     assert "no verification commands" in dict(queue.deferred)[judged().finding.key]
@@ -274,7 +290,7 @@ def _apply(
         overlay=overlay,
         playbook="playbooks/maintain",
         repository=repository,
-        open_change_requests=5,
+        max_open_fix_requests=5,
     )
     session = Session(
         repository=repository.path,

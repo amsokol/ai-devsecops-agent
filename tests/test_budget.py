@@ -8,7 +8,6 @@ different order, and that a task nobody paid for is never mistaken for a check t
 from __future__ import annotations
 
 import asyncio
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,12 +16,12 @@ from agent.backends import Brief, Budget, Failure, FakeBackend, Scripted, Sessio
 from agent.backends.port import Usage
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
-from agent.config import BUILTIN_CONFIG_DIR, Config
 from agent.domain import Outcome, Plan, PlannedTask, Reason, Role, RunResult, Trigger
 from agent.errors import ConfigError
 from agent.evidence import EvidenceStore
 from agent.executor import Executed, execute
 from agent.library import Library
+from agent.overlay import Overlay
 from agent.session import Session
 from agent.storage import FactCache
 from agent.toolkit import Refused, Toolkit, Toolkits
@@ -202,38 +201,69 @@ def test_the_step_budget_stops_a_task_and_tells_it_to_report(tmp_path: Path) -> 
         kit.call("read_file", {"path": "uv.lock"})
 
 
-def test_a_scheduled_run_is_given_less_than_a_reviewed_one() -> None:
-    execution = Config.load().execution
-    interactive = execution.budget_for(Trigger.CHANGE_OPENED)
-    scheduled = execution.budget_for(Trigger.MAINTAIN_SCHEDULED)
-    assert scheduled.task_seconds < interactive.task_seconds
-    assert scheduled.max_parallel <= interactive.max_parallel
-    assert interactive.run_tokens is not None
-    assert scheduled.run_tokens is not None
-    assert scheduled.run_tokens < interactive.run_tokens
+MAINTENANCE_BLOCK = (
+    "maintenance:\n  models:\n    analyst: fake/none\n  limits:\n    tokens_per_run: 800\n"
+    "    minutes_per_task: 10\n    tasks_at_once: 1\n"
+    "  queue:\n    max_new_issues_per_run: 5\n    max_open_fix_requests: 3\n"
+)
 
 
-def test_a_tightened_section_states_only_its_differences(tmp_path: Path) -> None:
-    """Otherwise changing one knob means restating the rest, and one copy drifts from the other."""
-    directory = tmp_path / "config"
-    shutil.copytree(BUILTIN_CONFIG_DIR, directory)
-    (directory / "execution.yaml").write_text(
-        "budget:\n  task_seconds: 800\n  task_steps: 90\n"
-        "  max_parallel: 3\n  run_tokens: 9\nscheduled_budget:\n  max_parallel: 1\n",
+def spending(review: str, tmp_path: Path, library: Library) -> Overlay:
+    """An overlay carrying the given `review:` block and the minimum around it."""
+    root = tmp_path / "overlay"
+    root.mkdir(exist_ok=True)
+    (root / "agent.yaml").write_text(
+        f"schema: 1\nquarantine:\n  days: 7\n{MAINTENANCE_BLOCK}{review}",
         encoding="utf-8",
     )
-    scheduled = Config.load(directory).execution.budget_for(Trigger.MAINTAIN_SCHEDULED)
-    assert scheduled.max_parallel == 1
-    assert (scheduled.task_seconds, scheduled.task_steps, scheduled.run_tokens) == (800, 90, 9)
+    return Overlay.load(root, library=library, notes_limit=8000)
 
 
-def test_a_budget_that_makes_no_sense_stops_the_run(tmp_path: Path) -> None:
-    directory = tmp_path / "config"
-    shutil.copytree(BUILTIN_CONFIG_DIR, directory)
-    path = directory / "execution.yaml"
-    path.write_text(
-        path.read_text(encoding="utf-8").replace("max_parallel: 4", "max_parallel: 0"),
-        encoding="utf-8",
+def test_maintenance_is_given_less_than_a_review_somebody_is_waiting_for(overlay: Overlay) -> None:
+    """The product decides both sets of numbers; the agent only decides which set a trigger gets."""
+    review = overlay.settings_for(Trigger.CHANGE_OPENED).limits
+    maintenance = overlay.settings_for(Trigger.MAINTAIN_SCHEDULED).limits
+    assert maintenance.seconds_per_task < review.seconds_per_task
+    assert maintenance.tasks_at_once <= review.tasks_at_once
+    assert review.tokens_per_run is not None
+    assert maintenance.tokens_per_run is not None
+    assert maintenance.tokens_per_run < review.tokens_per_run
+
+
+def test_maintenance_started_by_hand_is_held_to_the_same_numbers(overlay: Overlay) -> None:
+    """The work is identical whether a timer or a person started it, so the ceilings are too."""
+    assert overlay.settings_for(Trigger.MAINTAIN_REQUESTED) is overlay.maintenance
+    assert overlay.settings_for(Trigger.MAINTAIN_SCHEDULED) is overlay.maintenance
+
+
+def test_no_ceiling_is_something_a_product_writes_rather_than_omits(
+    tmp_path: Path, library: Library
+) -> None:
+    """`null` is a decision on the record; a missing key is a question nobody answered."""
+    written = spending(
+        "review:\n  models:\n    analyst: fake/none\n  limits:\n    tokens_per_run: null\n"
+        "    minutes_per_task: 15\n    tasks_at_once: 3\n",
+        tmp_path,
+        library,
     )
-    with pytest.raises(ConfigError, match="max_parallel"):
-        Config.load(directory)
+    assert written.review.limits.tokens_per_run is None
+    assert written.maintenance.limits.tokens_per_run == 800
+
+    with pytest.raises(ConfigError, match=r"tokens_per_run.*required"):
+        spending(
+            "review:\n  models:\n    analyst: fake/none\n  limits:\n    minutes_per_task: 15\n"
+            "    tasks_at_once: 3\n",
+            tmp_path,
+            library,
+        )
+
+
+def test_a_limit_that_makes_no_sense_stops_the_run(tmp_path: Path, library: Library) -> None:
+    """Nothing runs at zero tasks at once, and a run that reports nothing found would be a lie."""
+    with pytest.raises(ConfigError, match="tasks_at_once"):
+        spending(
+            "review:\n  models:\n    analyst: fake/none\n  limits:\n    tokens_per_run: 9\n"
+            "    minutes_per_task: 15\n    tasks_at_once: 0\n",
+            tmp_path,
+            library,
+        )

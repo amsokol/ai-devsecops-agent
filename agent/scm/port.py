@@ -260,8 +260,14 @@ class Platform(Protocol):
         that opens a second change request carrying the same edit.
         """
 
-    def push(self, path: Path, branch: str) -> None:
-        """Send a prepared branch to the hosting platform, under the agent's own credential."""
+    def push(self, path: Path, *, source: str, target: str) -> None:
+        """Send one prepared ref to the hosting platform, under the agent's own credential.
+
+        `source` is a branch ref or a commit that already exists locally; `target` is the ref to
+        create or move there. Both are named rather than derived, because the two callers mean
+        different things: a fix branch people will read, and the ref the agent keeps its own memory
+        in.
+        """
 
     def propose(self, new: NewChange) -> Proposal:
         """Open a change request for a branch that is already pushed."""

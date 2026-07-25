@@ -25,7 +25,7 @@ def make_backend(binding: Binding) -> Backend:
             except ImportError as error:
                 raise ConfigError(
                     f"the cursor backend needs the cursor-sdk package: {error}. Install the agent "
-                    "with its 'cursor' extra, or bind the role to another backend in models.yaml"
+                    "with its 'cursor' extra, or bind the role to another backend in the overlay"
                 ) from None
             return CursorBackend(model=binding.model, sandbox=binding.sandbox)
         case "fake":

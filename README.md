@@ -1,6 +1,6 @@
 # ai-devsecops-agent
 
-DevSecOps agent that reviews proposed changes and maintains a repository's default branch. It is the
+AI DevSecOps agent that reviews proposed changes and maintains a repository's default branch. It is the
 executing half of a two-part system: all judgement lives in the knowledge library
 [`ai-devsecops-skills-knowledge`](https://github.com/amsokol/ai-devsecops-skills-knowledge), and each
 product supplies its own overlay of values and invariants.
@@ -15,14 +15,16 @@ ecosystem procedures — those are prose in the library.
 Start with [`DESIGN.ru.md`](DESIGN.ru.md) (Russian), which covers the architecture, the model
 selection per role, the agent SDKs behind one narrow port, budgets and degradation, security
 boundaries, and the implementation stages. The exchange contract between library and agent is
-`CONTRACT.md` in the library.
+`CONTRACT.md` in the library. What changed between releases, and what a run will do differently
+afterwards, is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Usage
 
 ```bash
 uv sync
 uv run agent review  --repo . --change 12 --base main --library ./library [--publish]
-uv run agent maintain --repo . --library ./library [--scheduled]
+uv run agent maintain --repo . --library ./library [--scheduled] [--publish]
+uv run agent maintain --repo . --library ./library --wake-issue 7 --actor <login>
 uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
@@ -33,7 +35,7 @@ checked. The digest covers identity, index and document bodies rather than the d
 checkout of the tag and the unpacked release artefact verify the same.
 
 Local Cursor runs on a machine that cannot provide the SDK sandbox need `sandbox: false` under
-`backends: cursor:` in `agent/config/models.yaml` (or a `--config-dir` copy). The shipped default
+`backends: cursor:` in `agent/config/backends.yaml` (or a `--config-dir` copy). The shipped default
 keeps the sandbox on.
 
 `--plan-only` builds and prints the plan without executing tasks, which is the way to see what a
@@ -47,6 +49,22 @@ prove a verdict reproduces without the cache of immutable facts.
 | `--run-dir` | where run records are written, default `.agent/runs`; publish it as a CI artefact |
 | `--config-dir` | replaces the built-in configuration wholesale |
 
+## Which overlay a review obeys
+
+The overlay is where the meaning of a finding is settled for this product: the quarantine window, the
+documented exceptions, which ecosystems are examined at all, and `NOTES.md`, which enters every task's
+prompt. A review therefore reads it **from the merge base**, not from the change under review. Read
+from the checkout, one commit would be enough to set the quarantine to zero, drop the ecosystem whose
+dependency it bumps, or add a line to the notes telling the model what to conclude — and the run would
+carry that out while reporting a pass. The change is examined in full; it just does not get to write
+the rules it is judged by, and the edit takes effect the moment it is merged.
+
+When the base version is not the visible one, the review says so in its first line and the manifest
+records which commit the overlay came from. Two cases fall back to the checkout and both are named:
+an overlay kept outside the repository is not part of any change, and a base with no overlay is a
+change introducing one, where there is no earlier version to prefer. A maintenance run reads the
+checkout, because there it *is* the default branch.
+
 ## Storage
 
 Three kinds of persistence, separate because losing each one means something different.
@@ -55,12 +73,15 @@ Three kinds of persistence, separate because losing each one means something dif
 | --- | --- | --- |
 | run record: manifest and evidence | `--run-dir`, published as a CI artefact | every run |
 | cache of immutable facts | `.agent/cache`, a directory a CI cache can restore and save | only a run on the default branch |
-| agent state | the git ref named in `agent/config/storage.yaml` | only a run on the default branch |
+| agent state: which checks keep failing | the git ref named in `agent/config/storage.yaml` | only a scheduled run, and only when it changed |
 
 Only facts that cannot change are cached — a version's publication date, an artefact digest. Advisory
 data and version lists never are, or a weekly run would stop noticing new advisories, which is the
 reason the weekly run exists. Failures are not cached either: an unreachable host is not a fact about
 a package.
+
+The state is separate from the cache on purpose. A cache may vanish and cost only time; the state
+decides whether a person is told something, so it must not depend on a runner keeping a directory.
 
 Exit codes are an interface, because CI acts on them: `0` permitted, `5` blocked, `6` inconclusive,
 `64` configuration error, `2` internal failure. A run that could not execute its tasks exits `6` and
@@ -68,11 +89,36 @@ never `0` — the absence of a result is not a result.
 
 ## Roles and models
 
-A task runs as a role, and `agent/config/models.yaml` says which backend and model answers for each
-one. A model is named as a pair, because the backend decides which models exist: `composer-2.5` alone
-is not an address. Only the roles a plan reaches are ever created, so a binding to an SDK this machine
-has not installed costs nothing until something needs it — one configuration serves a laptop and a
-pipeline.
+**The agent names no model, anywhere.** Not in code, not in the configuration it ships. Which backend
+and model answers for each role is stated by the product in its overlay, per kind of run, and so is
+what that run may spend:
+
+```yaml
+review:                            # a change came up for review; somebody is waiting
+  models:
+    analyst: cursor/composer-2.5
+maintenance:                       # the default branch is being maintained
+  models:
+    analyst: cursor/composer-2.5   # finds what has gone stale or vulnerable
+    fixer: cursor/composer-2.5     # writes the fix and proves it safe
+```
+
+Per kind of run rather than once for the file, because "the careful model on a change somebody is
+waiting for, the cheap one on the weekly sweep" is a decision products make. The cost is that a role
+both kinds use is written twice.
+
+That is not a preference about configuration style. A product outlives any one provider: a
+subscription ends, an adapter appears, a project decides its reviews are worth a more expensive
+model. With a default inside the agent, each of those would be a fork of the agent's configuration
+directory, carried across every release for the sake of one line — and the agent would be deciding
+how somebody else's money is spent. The provider is written with the model rather than beside it,
+because the provider decides which models exist: `composer-2.5` alone is not an address, and moving a
+role to another provider is then one word on one line. Provider credentials come from the environment
+and never from the overlay, which is a file in git.
+
+Only the roles a plan reaches are ever created, so a product that switches every role to another
+provider never loads the previous adapter at all — the SDK it needed can be uninstalled. A role the
+run needs and nobody bound is a startup error naming the role, not a silent substitution.
 
 What a role *requires* is not configurable. An analyst that cannot call the tool registry has nothing
 to establish a fact with, so those needs live in `agent/roles.py` next to the code that has them. Each
@@ -81,16 +127,28 @@ the missing ability. Modifying files is not among those abilities: `edit_file` i
 other, so a `fixer` needs the registry and nothing more, and the check happens before a maintenance
 run spends anything rather than when the first fix is attempted.
 
-One model everywhere for now. Choosing per role before the eval harness exists would be taste with a
-version number attached. The manifest records which pair each role was bound to, so a later comparison
-has something to compare.
+What the agent does ship is `agent/config/backends.yaml`: settings per adapter, such as whether the
+SDK's own sandbox is used. A product chooses what it pays for; how tightly that runs is not a knob it
+may loosen. The manifest records the pair each role was bound to, so "which model judged this" stays
+answerable afterwards.
 
 ## Budgets
 
-Analysis tasks are independent, so they run concurrently, and `agent/config/execution.yaml` states
-what they may spend. Per task: wall clock and a ceiling on tool calls. Per run: how many sessions
-overlap, and optionally a shared token ceiling. A scheduled run gets its own, tighter section — it
-spends with nobody watching.
+Analysis tasks are independent, so they run concurrently, and each kind of run states what it may
+spend in its own block: `review.limits` and `maintenance.limits`, each with a token ceiling for the
+whole run, wall clock per task, and how many tasks overlap. Neither inherits from the other, so what
+a run may spend is visible where that run is described rather than assembled from two places by the
+reader. A maintenance run started by hand gets the same numbers as one that woke on a timer: the work
+is identical, and a second set would only be a second thing to keep in step.
+
+How much a maintenance run may leave behind is a different question — how loud the tracker gets, not
+what the run costs — so it has its own block inside the same section, `maintenance.queue`.
+
+Every key is required, and a ceiling that is not wanted is written as `null` rather than omitted. A
+missing key is a question nobody answered, and treating it as "no limit" would make the most
+expensive setting in the file the one nobody ever typed. One number is the agent's and not the
+product's: `tool_calls_per_task` in `agent/config/limits.yaml`, which counts a step nobody outside
+the agent sees and guards against a session that has stopped making progress.
 
 Every limit ends the same way. A task that hits one, or that the shared ceiling could not pay for, is
 recorded as `exhausted`, and a required task in that state makes the run inconclusive. Nothing the
@@ -111,7 +169,7 @@ large change would turn real analysis into `exhausted` and teach the team to dis
 
 A maintenance run does not stop at reporting. Findings it can act on — demonstrated by reproducible
 evidence, with a remedy stated — become fix tasks, in a fixed order with `security` first and within
-the queue the overlay's `limits` allow. Every finding about one package pin or one file is one task,
+the queue `maintenance.queue` in the overlay allows. Every finding about one package pin or one file is one task,
 because three advisories against one pin are one bump, and three branches carrying the same edit is
 how a weekly run teaches a team to stop reading it.
 
@@ -153,7 +211,7 @@ Pushing uses the agent's own credential over HTTPS, with the token passed to git
 helper that reads it from the environment rather than from a command line, and with any configured
 helper cleared first so a developer's keychain cannot answer instead. Nothing is ever force-pushed: a
 branch that will not fast-forward is reported and left as it is. Commits are authored as
-`devsecops-agent <devsecops-agent@users.noreply.github.com>` — a `users.noreply` address on purpose,
+`ai-devsecops-agent <ai-devsecops-agent@users.noreply.github.com>` — a `users.noreply` address on purpose,
 because platforms match commits to accounts by e-mail and a plausible address is how a machine's commit
 ends up in somebody's contribution graph.
 
@@ -286,32 +344,81 @@ is what the reconciliation trusts.
 
 Titles are built from the parts that identify a problem and none that drift — no version, no advisory
 identifier — so a saved search keeps matching while the body is updated in place. New issues per run
-are limited by the overlay (`maintenance.new_issues_per_run`); findings over the limit are left for the
-next run and named in the record, never dropped and never merged into somebody else's issue.
+are limited by the overlay (`maintenance.queue.max_new_issues_per_run`); findings over the limit are
+left for the next run and named in the record, never dropped and never merged into somebody else's
+issue.
 
 The same run pushes what it verified and proposes it, so a weekly pass needs write access to all three:
 
 ```yaml
+concurrency:                  # one maintenance run at a time; a skipped week costs less than two
+  group: ai-devsecops-agent   # runs fighting over the same branches and issues
+  cancel-in-progress: false
 permissions:
-  contents: write             # push fix branches; never force, never the default branch
+  contents: write             # push fix branches and the agent's own state ref; never force
   issues: write               # raise, update and close tracked findings
   pull-requests: write        # propose the branches it prepared
 steps:
   - uses: actions/checkout@v5
-  - run: uv run agent maintain --publish
+  - run: uv run agent maintain --scheduled --publish
     env:
       AGENT_GITHUB_TOKEN: ${{ steps.agent.outputs.token }}
 ```
 
+## What a scheduled run holds back
+
+Nobody reads a weekly run. Every restraint below exists because the failure mode of an unattended
+agent is not a wrong answer, it is a stream of writing that a team learns to skip.
+
+*Silence when there is nothing.* A scheduled run that finds nothing new, closes nothing and ships
+nothing writes nowhere. No "all clear" issue, no weekly comment; the run record already says the run
+happened and what it checked.
+
+*A tighter budget.* `maintenance.limits` in the overlay usually gets less time, less parallelism and
+a lower token ceiling than `review.limits`. The product states both sets of numbers; a configuration
+mistake should not be discovered as an invoice a month later.
+
+*Volume limits.* `maintenance.queue` caps new issues per run and fix branches open for review at
+once. What does not fit waits for next week and is named in the record.
+
+*One run at a time*, which is the platform's own concurrency group above rather than a lock the agent
+invents. Two runs mutating one default branch fight over the same branches and issues, and a homegrown
+lock left behind by a cancelled job is worse than a skipped week.
+
+*One escalation when a check keeps failing.* The exception to the silence rule. A check that fails
+twice for the same reason, without completing in between, gets a single issue about the failure itself
+— keyed on the check and the reason, updated by later runs, and closed when the check runs to
+completion again. This is what keeps a quietly broken source, an expired credential or a registry page
+that changed shape, from reading as a clean repository for months.
+
+That last one is why the agent keeps a memory: whether a failure is a repeat is the one thing a run
+cannot work out for itself. It lives in `refs/agent/state` as one small JSON document — not a branch,
+so it is in nobody's history — chained forward so no push is ever forced, and written only when it has
+something new to say. A run whose memory cannot be stored says so in its warnings and carries on: the
+cost is that next week's repeat may read as a first failure, which is the safe direction.
+
+## Not waking on its own voice
+
+`maintain --wake-issue N --actor <login>` is how a comment on a tracked issue starts a run. The actor
+is checked before anything is spent, and the run ends as `declined` if the comment was a bot's, or if
+the login is the account the agent itself publishes as. An agent that answers its own comment answers
+it forever, and each turn of that loop costs a model.
+
+This is why the caution about publishing under a human account matters: a workflow can filter `[bot]`
+authors, but it cannot tell a machine account from a colleague. Publish as a bot, or pass `--actor` and
+let the agent compare accounts.
+
 ## Status
 
-Stage 6, second slice: a review run publishes its decision on GitHub and reconciles its threads by
-finding key, and a maintenance run tracks its findings as issues by the same key, pushes what it
-verified and proposes it as a change request. Under that sit the decision path, the tool registry, the
-Cursor SDK adapter, role bindings, concurrency and budgets; every analyst capability the library
-defines can run, and a run can be narrowed with `--only` (for example `deps-vuln@python-uv`). What is
-still ahead: the restraints a scheduled run needs, not waking the agent on its own comment, and the
-eval harness. `backend: fake` remains available for CI that must exercise the pipeline without a model.
+Stage 6 is complete. A review run publishes its decision on GitHub and reconciles its threads by
+finding key; a maintenance run tracks its findings as issues by the same key, pushes what it verified
+and proposes it as a change request; a scheduled run holds itself back as described above, remembers
+which checks keep failing, and refuses to be woken by its own comment. Under that sit the decision
+path, the tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets; every analyst
+capability the library defines can run, and a run can be narrowed with `--only` (for example
+`deps-vuln@python-uv`). What is still ahead is the eval harness — the way to choose a model per role on
+evidence rather than taste. `backend: fake` remains available for CI that must exercise the pipeline
+without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.

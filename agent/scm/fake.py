@@ -39,7 +39,7 @@ class Call:
 class FakePlatform:
     head: str = "head"
     author: str = "somebody"
-    login: str = "devsecops-agent[bot]"
+    login: str = "ai-devsecops-agent[bot]"
     """Who published things are shown as. A bot by default, because that is the only identity a run
     should publish under."""
     is_bot: bool = True
@@ -176,12 +176,13 @@ class FakePlatform:
         self._check()
         return tuple(item for item in self.proposed if item.head.startswith(prefix))
 
-    def push(self, path: Path, branch: str) -> None:
+    def push(self, path: Path, *, source: str, target: str) -> None:
         self._check()
-        if branch in self.unpushable:
-            raise ScmError(f"pushing {branch} failed: it is not a fast-forward")
-        self.pushed.append(branch)
-        self.calls.append(Call("push", detail=branch))
+        name = target.removeprefix("refs/heads/")
+        if name in self.unpushable:
+            raise ScmError(f"pushing {name} failed: it is not a fast-forward")
+        self.pushed.append(name)
+        self.calls.append(Call("push", detail=name))
 
     def propose(self, new: NewChange) -> Proposal:
         self._check()
