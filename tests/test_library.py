@@ -16,7 +16,7 @@ def test_index_is_read_with_kinds_and_applies_to(library: Library) -> None:
 
 def test_body_strips_the_header(library: Library) -> None:
     body = library.get("policy/verdicts").body()
-    assert body.startswith("Security critical")
+    assert body.startswith("Classes, severities")
     assert "kind:" not in body
 
 

@@ -64,11 +64,16 @@ never `0` — the absence of a result is not a result.
 
 ## Status
 
-Stage 2 of the implementation. The CLI, library and overlay loading, the deterministic planner and
-the run manifest exist, as do the deterministic tools — repository access, allowlisted commands,
-allowlisted hosts, version and date arithmetic — together with the evidence store and the fact cache.
-No subagent runs yet, so every real run is inconclusive by construction; use `--plan-only` until
-stage 3 lands.
+Stage 3 is half done. Everything except the model is in place: the CLI, library and overlay loading,
+the deterministic planner, the deterministic tools, the evidence store and the fact cache, and now
+the whole decision path — prompt assembly, strict validation of a subagent's result file with one
+retry, stable finding keys, deduplication, the blocking table read from the library, the verdict and
+the report.
+
+What is missing is the two halves that let a model take part: the tool server that gives a subagent
+the agent's tools, and the Cursor SDK adapter. Until they land, `backend: cursor` in
+`config/execution.yaml` refuses to start and the pipeline can be exercised with `backend: fake`,
+which produces a report from scripted answers and says in the manifest that it did.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.

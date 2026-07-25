@@ -17,7 +17,7 @@ from agent.domain import Trigger
 from agent.errors import AgentError, ExitCode
 from agent.library import Library
 from agent.manifest import read_manifest
-from agent.orchestrator import Request, RunRecord, run
+from agent.orchestrator import REPORT, Request, RunRecord, run
 
 DEFAULT_OVERLAY = ".devsecops"
 DEFAULT_RUN_DIR = ".agent/runs"
@@ -151,8 +151,15 @@ def _print_summary(record: RunRecord) -> None:
         print(f"  n/a  {entry['capability']:<28} {entry['reason']}")
     for warning in manifest.warnings:
         print(f"  warning: {warning}")
+    for finding in manifest.findings:
+        marker = "block" if finding["action"] == "block" else "note "
+        print(f"  {marker} {finding['severity']:<8} {finding['key']}")
+    if manifest.cost.get("known"):
+        print(f"cost {manifest.cost['tokens']} tokens over {manifest.cost['sessions']} session(s)")
     print(f"result {manifest.result}  exit {int(record.exit_code)}")
     print(f"manifest {record.manifest_path}")
+    if record.report:
+        print(f"report {record.manifest_path.parent / REPORT}")
 
 
 if __name__ == "__main__":

@@ -94,6 +94,16 @@ class LibraryPin:
 
 
 @dataclass(frozen=True, slots=True)
+class Execution:
+    """Which backend runs subagents, on which model, and what one task may spend."""
+
+    backend: str
+    model: str
+    task_seconds: int
+    task_steps: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class Storage:
     """Where persistence lives. `cache_path` is relative to the run directory's parent in CI."""
 
@@ -110,6 +120,7 @@ class Config:
     notes_limit: int
     ceiling: Ceiling
     storage: Storage
+    execution: Execution
     never_send: tuple[str, ...]
 
     @classmethod
@@ -142,6 +153,7 @@ class Config:
             notes_limit=int(limits.get("overlay_notes_characters", 8000)),
             ceiling=Ceiling.read(directory),
             storage=_read_storage(directory),
+            execution=_read_execution(directory),
             never_send=tuple(str(item) for item in (egress.get("never_send") or ())),
         )
 
@@ -150,6 +162,32 @@ class Config:
             if trigger in scenario.triggers:
                 return scenario
         raise ConfigError(f"no scenario in {self.directory} handles trigger {trigger}")
+
+
+def _read_execution(directory: Path) -> Execution:
+    path = directory / "execution.yaml"
+    raw = load_yaml_mapping(path)
+    budget = raw.get("budget") or {}
+    if not isinstance(budget, dict):
+        raise ConfigError(f"{path}: budget must be a mapping")
+    seconds = _positive(budget.get("task_seconds", 900), path=path, name="task_seconds")
+    steps = budget.get("task_steps")
+    return Execution(
+        backend=str(raw.get("backend") or "").strip() or _missing(path, "backend"),
+        model=str(raw.get("model") or "").strip() or _missing(path, "model"),
+        task_seconds=seconds,
+        task_steps=_positive(steps, path=path, name="task_steps") if steps is not None else None,
+    )
+
+
+def _positive(value: Any, *, path: Path, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{path}: {name} must be a positive integer, got {value!r}")
+    return value
+
+
+def _missing(path: Path, name: str) -> str:
+    raise ConfigError(f"{path}: {name} is required")
 
 
 def _read_storage(directory: Path) -> Storage:

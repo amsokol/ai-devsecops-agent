@@ -82,16 +82,31 @@ def test_plan_only_review_succeeds_and_records_a_manifest(
     assert any("not pinned" in warning for warning in manifest["warnings"])
 
 
-def test_a_run_that_executed_nothing_is_inconclusive(
+def test_a_review_whose_tasks_all_report_clean_passes(
     git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
 ) -> None:
+    """The default scripted answer is `clean`, so this is the whole pipeline minus the model."""
     commit(git_repo, "src/api.py", "value = 1\n")
     run_dir = tmp_path / "runs"
     code = main(["review", *arguments(git_repo, library_root, overlay_root, run_dir, config_dir)])
-    assert code == int(ExitCode.INCONCLUSIVE)
-    manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
-    assert manifest["result"] == "inconclusive"
-    assert {task["reason"] for task in manifest["tasks"]} == {"not-implemented"}
+    assert code == int(ExitCode.OK)
+    manifest_path = next(run_dir.glob("*/manifest.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["result"] == "pass"
+    assert {task["outcome"] for task in manifest["tasks"]} == {"clean"}
+    assert manifest["policy"]["blocks"] == [
+        "routine/critical",
+        "security/critical",
+        "security/high",
+    ]
+    assert manifest["cost"]["accounted_sessions"] == 2
+    report = (manifest_path.parent / "report.md").read_text(encoding="utf-8")
+    assert "No blocking findings" in report
+    assert "code-quality" in report
+
+    prompt = next(run_dir.glob("*/tasks/code-vuln/attempt-1/prompt.md")).read_text(encoding="utf-8")
+    assert "## Knowledge" in prompt
+    assert "capabilities/code-vuln" in prompt
 
 
 def test_a_broken_overlay_stops_the_run_before_any_work(

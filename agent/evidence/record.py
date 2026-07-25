@@ -77,6 +77,15 @@ class Evidence:
             raise ValueError("an unverified fact must carry a reason")
 
     @property
+    def key(self) -> str:
+        """How a finding cites this record. Derived from the question and subject, never invented.
+
+        A subagent can only produce a valid key by having asked the question, which is what makes
+        "cite your evidence" enforceable rather than a request.
+        """
+        return f"{self.question}|{self.subject.key()}"
+
+    @property
     def reliability(self) -> Reliability:
         return Reliability.of(self.origin)
 

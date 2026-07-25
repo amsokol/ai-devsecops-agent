@@ -1,0 +1,13 @@
+# Which backend runs the subagents, and what one task may spend.
+#
+# One model for every role for now. The mapping "role → backend and model" arrives with the eval
+# harness: choosing models before there is a way to measure them would just be taste with a version
+# number attached.
+
+backend: cursor
+model: composer-2.5
+
+budget:
+  # Wall clock for one task. A task that hits it ends as `exhausted`, which refuses the merge — the
+  # run says the check did not finish rather than that it found nothing.
+  task_seconds: 900

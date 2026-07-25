@@ -39,6 +39,27 @@ INDEX = """\
 | `ecosystems/github-actions` | ecosystem | Workflow pins. | `.github/workflows` |
 """
 
+# The blocking table is parsed out of this document, so the fixture has to carry a real one. Its
+# values mirror the shipped library on purpose: a test that quietly used a different policy would
+# prove nothing about the agent people run.
+VERDICTS = """\
+Classes, severities and what blocks.
+
+## What blocks
+
+| Class | Severity | Blocks |
+| --- | --- | --- |
+| `security` | `critical`, `high` | yes |
+| `security` | `medium`, `low` | no — comment |
+| `routine` | `critical` | yes |
+| `routine` | `high`, `medium`, `low` | no — comment |
+| forbidden state | any | yes |
+
+## Evidence ceiling
+
+Reproducible evidence may block; heuristic evidence may only comment.
+"""
+
 DOCUMENTS = {
     "playbooks/pr-review": "Review the change. See [verdicts](../policy/verdicts.md).\n",
     "playbooks/maintain": "Maintain, never judge changes: see [review](pr-review.md).\n",
@@ -46,7 +67,7 @@ DOCUMENTS = {
     "capabilities/code-vuln": "Look for security defects.\n",
     "capabilities/deps-outdated": "Look for drift. See [verdicts](../policy/verdicts.md).\n",
     "capabilities/deps-vuln": "Look for advisories.\n",
-    "policy/verdicts": "Security critical and high block.\n",
+    "policy/verdicts": VERDICTS,
     "ecosystems/python-uv": (
         "Use uv.\n\n## Requirements\n\n- Binaries: `uv`.\n- Hosts: `pypi.org`.\n\n## Detect\n\n"
         "A `uv.lock` in the tree.\n"
@@ -97,15 +118,19 @@ def config() -> Config:
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    """The shipped configuration with the library pin removed.
+    """The shipped configuration, with the library pin removed and the backend replaced.
 
-    The pin names the real library, and these tests run against a fixture one. Blanking it keeps the
-    rest of the configuration — scenarios, ceiling, limits — exactly as it ships, so a test still
-    exercises what a release does.
+    The pin names the real library and these tests run against a fixture one; the backend would call
+    a model. Everything else — scenarios, ceiling, limits, budgets — stays exactly as it ships, so a
+    test still exercises what a release does.
     """
     directory = tmp_path / "config"
     shutil.copytree(BUILTIN_CONFIG_DIR, directory)
     (directory / "library.yaml").write_text("version:\ndigest:\n", encoding="utf-8")
+    execution = (directory / "execution.yaml").read_text(encoding="utf-8")
+    (directory / "execution.yaml").write_text(
+        execution.replace("backend: cursor", "backend: fake"), encoding="utf-8"
+    )
     return directory
 
 

@@ -11,7 +11,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
-from agent.evidence.record import Evidence, Subject
+from agent.evidence.record import Evidence, Reliability, Subject
 
 
 class EvidenceStore:
@@ -43,6 +43,13 @@ class EvidenceStore:
 
     def find(self, question: str, subject: Subject) -> Evidence | None:
         return self._by_question.get((question, subject.key()))
+
+    def keys(self) -> frozenset[str]:
+        """Every record a finding may cite. Anything else was not established by this run."""
+        return frozenset(record.key for record in self._records if record.is_verified)
+
+    def reliabilities(self) -> dict[str, Reliability]:
+        return {record.key: record.reliability for record in self._records}
 
     def unverified(self) -> tuple[Evidence, ...]:
         return tuple(record for record in self._records if not record.is_verified)

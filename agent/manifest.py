@@ -37,6 +37,10 @@ class TaskRecord:
     knowledge: tuple[str, ...]
     outcome: Outcome | None = None
     reason: Reason | None = None
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    """Every session run for this task, including rejected results — otherwise a retried task looks
+    identical to one that worked first time, and the prompt that failed is unrecoverable."""
+    notes: str = ""
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -49,6 +53,8 @@ class TaskRecord:
             "knowledge": list(self.knowledge),
             "outcome": self.outcome.value if self.outcome else None,
             "reason": self.reason.value if self.reason else None,
+            "attempts": self.attempts,
+            "notes": self.notes,
         }
 
 
@@ -71,6 +77,9 @@ class Manifest:
     cache: dict[str, Any] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     findings: list[dict[str, Any]] = field(default_factory=list)
+    verdict: dict[str, Any] = field(default_factory=dict)
+    policy: dict[str, Any] = field(default_factory=dict)
+    """Which blocking table this run applied, so a verdict can be checked against the knowledge."""
     models: list[dict[str, Any]] = field(default_factory=list)
     tool_versions: dict[str, str] = field(default_factory=dict)
     cost: dict[str, Any] = field(
@@ -148,6 +157,8 @@ class Manifest:
             "cache": self.cache,
             "evidence": self.evidence,
             "findings": self.findings,
+            "verdict": self.verdict,
+            "policy": self.policy,
             "models": self.models,
             "tool_versions": self.tool_versions,
             "cost": self.cost,
