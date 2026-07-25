@@ -27,7 +27,7 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.1.1` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.1.2` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
@@ -64,16 +64,10 @@ never `0` — the absence of a result is not a result.
 
 ## Status
 
-Stage 3 is half done. Everything except the model is in place: the CLI, library and overlay loading,
-the deterministic planner, the deterministic tools, the evidence store and the fact cache, and now
-the whole decision path — prompt assembly, strict validation of a subagent's result file with one
-retry, stable finding keys, deduplication, the blocking table read from the library, the verdict and
-the report.
-
-What is missing is the two halves that let a model take part: the tool server that gives a subagent
-the agent's tools, and the Cursor SDK adapter. Until they land, `backend: cursor` in
-`config/execution.yaml` refuses to start and the pipeline can be exercised with `backend: fake`,
-which produces a report from scripted answers and says in the manifest that it did.
+Stage 3: the decision path, the tool registry and the Cursor SDK adapter are in place. A run can be
+narrowed with `--only` (for example `deps-vuln@python-uv`) while the remaining analyst tasks, true
+parallelism and GitHub actions are still ahead. `backend: fake` remains available for CI that must
+exercise the pipeline without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.
