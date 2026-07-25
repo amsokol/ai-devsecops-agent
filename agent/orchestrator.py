@@ -14,7 +14,7 @@ from pathlib import Path
 
 from agent import __version__
 from agent.backends.port import Backend, Budget
-from agent.backends.select import make_backend
+from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import Config
 from agent.domain import Plan, Trigger
@@ -169,6 +169,15 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     grants = grant(library=library, ecosystems=overlay.ecosystems, ceiling=config.ceiling)
     manifest.grants = {"binaries": sorted(grants.binaries), "hosts": sorted(grants.hosts)}
 
+    # Every role the plan needs must have a backend that can do the role's work, settled before
+    # anything is spent: an unbound `fixer`, or one bound to an adapter that cannot change files, is
+    # a mistake in a file. Found mid-run it would mean a maintenance pass that opened issues and
+    # then reported it had fixed nothing.
+    manifest.roles = [
+        config.models.for_role(role).as_json()
+        for role in sorted({task.role for task in plan.tasks})
+    ]
+
     # Recorded before the plan-only exit: seeing what a trigger would be allowed to spend is half
     # the reason to ask for a plan without running one.
     limits = config.execution.budget_for(request.trigger)
@@ -198,7 +207,11 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     )
 
     owned = backend is None
-    backend = backend or make_backend(config.execution)
+    roster = Roster.of(backend) if backend is not None else Roster(config.models)
+    if owned:
+        # Created up front, so an SDK this machine has not installed is an error before the first
+        # task rather than one task's failure among several.
+        roster.prepare({task.role for task in plan.tasks})
     # One clock for the whole run: quarantine arithmetic that moved between two tasks of the same
     # run would make the verdict depend on how long the earlier tasks took.
     toolkits = Toolkits(
@@ -213,7 +226,7 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     executed = asyncio.run(
         _execute(
             plan,
-            backend=backend,
+            roster=roster,
             library=library,
             notes=overlay.notes,
             evidence=session.evidence,
@@ -246,7 +259,7 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
 async def _execute(
     plan: Plan,
     *,
-    backend: Backend,
+    roster: Roster,
     library: Library,
     notes: str,
     evidence: EvidenceStore,
@@ -259,7 +272,7 @@ async def _execute(
     try:
         return await execute(
             plan,
-            backend=backend,
+            roster=roster,
             library=library,
             notes=notes,
             evidence=evidence,
@@ -270,7 +283,7 @@ async def _execute(
         )
     finally:
         if close:
-            await backend.close()
+            await roster.close()
 
 
 def _conclude(

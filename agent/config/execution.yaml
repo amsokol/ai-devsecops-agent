@@ -1,16 +1,4 @@
-# Which backend runs the subagents, and what a run may spend.
-#
-# One model for every role for now. The mapping "role → backend and model" arrives with the eval
-# harness: choosing models before there is a way to measure them would just be taste with a version
-# number attached.
-
-backend: cursor
-model: composer-2.5
-
-# Confine the backend's own tools as well as ours. Not every machine can: a sandbox the environment
-# refuses to provide makes every session fail to start, and turning this off is then a decision
-# somebody made on purpose rather than a downgrade nobody noticed.
-sandbox: true
+# What a run and its tasks may spend. Which backend and model runs each role is in models.yaml.
 
 budget:
   # Wall clock for one task. A task that hits it ends as `exhausted`, which refuses the merge — the

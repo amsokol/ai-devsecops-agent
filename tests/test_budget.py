@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from agent.backends import Brief, Budget, Failure, FakeBackend, Scripted, SessionResult
 from agent.backends.port import Usage
+from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import BUILTIN_CONFIG_DIR, Config
 from agent.domain import Outcome, Plan, PlannedTask, Reason, Role, RunResult, Trigger
@@ -103,7 +104,7 @@ def run(
     return asyncio.run(
         execute(
             plan,
-            backend=backend,
+            roster=Roster.of(backend),
             library=library,
             notes="",
             evidence=store,
@@ -217,7 +218,7 @@ def test_a_tightened_section_states_only_its_differences(tmp_path: Path) -> None
     directory = tmp_path / "config"
     shutil.copytree(BUILTIN_CONFIG_DIR, directory)
     (directory / "execution.yaml").write_text(
-        "backend: fake\nmodel: none\nbudget:\n  task_seconds: 800\n  task_steps: 90\n"
+        "budget:\n  task_seconds: 800\n  task_steps: 90\n"
         "  max_parallel: 3\n  run_tokens: 9\nscheduled_budget:\n  max_parallel: 1\n",
         encoding="utf-8",
     )

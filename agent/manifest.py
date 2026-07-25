@@ -85,6 +85,8 @@ class Manifest:
     """Which blocking table this run applied, so a verdict can be checked against the knowledge."""
     budget: dict[str, Any] = field(default_factory=dict)
     """The limits this run was given and what it spent, so an `exhausted` task is explainable."""
+    roles: list[dict[str, str]] = field(default_factory=list)
+    """Which backend and model each role the plan needed, checked before anything was spent."""
     models: list[dict[str, Any]] = field(default_factory=list)
     tool_versions: dict[str, str] = field(default_factory=dict)
     cost: dict[str, Any] = field(
@@ -167,6 +169,7 @@ class Manifest:
             "verdict": self.verdict,
             "policy": self.policy,
             "budget": self.budget,
+            "roles": self.roles,
             "models": self.models,
             "tool_versions": self.tool_versions,
             "cost": self.cost,

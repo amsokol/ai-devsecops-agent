@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.backends import Brief, Budget, Failure, FakeBackend, Scripted, SessionResult
+from agent.backends.select import Roster
 from agent.domain import Outcome, Plan, PlannedTask, Reason, Role, Trigger
 from agent.evidence import Evidence, EvidenceStore, Origin, Subject
 from agent.executor import Executed, execute
@@ -72,7 +73,7 @@ def run(
     return asyncio.run(
         execute(
             plan_of(),
-            backend=backend,
+            roster=Roster.of(backend),
             library=library,
             notes="Only the API service is in scope.",
             evidence=store,

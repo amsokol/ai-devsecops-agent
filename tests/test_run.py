@@ -78,6 +78,7 @@ def test_plan_only_review_succeeds_and_records_a_manifest(
     manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
     assert manifest["result"] == "planned"
     assert [task["id"] for task in manifest["tasks"]] == ["code-quality", "code-vuln"]
+    assert manifest["roles"] == [{"role": "analyst", "backend": "fake", "model": "composer-2.5"}]
     assert manifest["library"]["pinned"] is False
     assert any("not pinned" in warning for warning in manifest["warnings"])
 

@@ -127,9 +127,9 @@ def config_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "config"
     shutil.copytree(BUILTIN_CONFIG_DIR, directory)
     (directory / "library.yaml").write_text("version:\ndigest:\n", encoding="utf-8")
-    execution = (directory / "execution.yaml").read_text(encoding="utf-8")
-    (directory / "execution.yaml").write_text(
-        execution.replace("backend: cursor", "backend: fake"), encoding="utf-8"
+    models = (directory / "models.yaml").read_text(encoding="utf-8")
+    (directory / "models.yaml").write_text(
+        models.replace("backend: cursor", "backend: fake"), encoding="utf-8"
     )
     return directory
 

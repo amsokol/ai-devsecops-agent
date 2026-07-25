@@ -6,15 +6,18 @@ a source tree. `--config-dir` replaces the directory wholesale.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Self
 
+from agent.backends.abilities import ABILITIES
 from agent.domain import Role, Trigger
 from agent.errors import ConfigError
 from agent.library import load_yaml_mapping
 from agent.overlay import Limits
+from agent.roles import needs
 from agent.tools.ceiling import Ceiling
 
 BUILTIN_CONFIG_DIR = Path(__file__).resolve().parent / "config"
@@ -105,24 +108,53 @@ class BudgetConfig:
 
 @dataclass(frozen=True, slots=True)
 class Execution:
-    """Which backend runs subagents, on which model, and what a run may spend."""
+    """What a run and its tasks may spend."""
 
-    backend: str
-    model: str
     budget: BudgetConfig
     scheduled_budget: BudgetConfig
     """Usually tighter: a scheduled run has nobody watching it while it spends."""
 
-    sandbox: bool = True
-    """Whether the backend confines its own tools with the SDK's sandbox.
-
-    Defence in depth rather than the main guard: a subagent already sees only its own task directory
-    through those tools. Environments that cannot sandbox have to say so explicitly, because a
-    silent downgrade is how a run ends up with fewer guarantees than its manifest claims.
-    """
-
     def budget_for(self, trigger: Trigger) -> BudgetConfig:
         return self.scheduled_budget if trigger.is_scheduled else self.budget
+
+
+@dataclass(frozen=True, slots=True)
+class Binding:
+    """One role, and the backend and model that answer for it."""
+
+    role: Role
+    backend: str
+    model: str
+    options: Mapping[str, Any] = field(default_factory=dict)
+    """Backend-specific settings, such as whether the SDK's own sandbox is used."""
+
+    @property
+    def sandbox(self) -> bool:
+        value = self.options.get("sandbox", True)
+        return value if isinstance(value, bool) else True
+
+    def as_json(self) -> dict[str, str]:
+        return {"role": self.role.value, "backend": self.backend, "model": self.model}
+
+
+@dataclass(frozen=True, slots=True)
+class Models:
+    """The role bindings declared here, already checked against what the adapters can do."""
+
+    bindings: Mapping[Role, Binding]
+
+    def for_role(self, role: Role) -> Binding:
+        binding = self.bindings.get(role)
+        if binding is None:
+            named = ", ".join(sorted(item.value for item in self.bindings)) or "none"
+            raise ConfigError(
+                f"no backend is bound to the {role.value!r} role in models.yaml (bound roles: "
+                f"{named}). A run that needs this role cannot proceed without one."
+            )
+        return binding
+
+    def as_json(self) -> list[dict[str, str]]:
+        return [self.bindings[role].as_json() for role in sorted(self.bindings)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +175,7 @@ class Config:
     ceiling: Ceiling
     storage: Storage
     execution: Execution
+    models: Models
     never_send: tuple[str, ...]
 
     @classmethod
@@ -176,6 +209,7 @@ class Config:
             ceiling=Ceiling.read(directory),
             storage=_read_storage(directory),
             execution=_read_execution(directory),
+            models=_read_models(directory),
             never_send=tuple(str(item) for item in (egress.get("never_send") or ())),
         )
 
@@ -193,16 +227,62 @@ def _read_execution(directory: Path) -> Execution:
     scheduled = _read_budget(
         raw.get("scheduled_budget"), path=path, where="scheduled_budget", fallback=budget
     )
-    sandbox = raw.get("sandbox", True)
-    if not isinstance(sandbox, bool):
-        raise ConfigError(f"{path}: sandbox must be true or false, got {sandbox!r}")
-    return Execution(
-        backend=str(raw.get("backend") or "").strip() or _missing(path, "backend"),
-        model=str(raw.get("model") or "").strip() or _missing(path, "model"),
-        budget=budget,
-        scheduled_budget=scheduled,
-        sandbox=sandbox,
-    )
+    return Execution(budget=budget, scheduled_budget=scheduled)
+
+
+def _read_models(directory: Path) -> Models:
+    """Read the role bindings, and refuse one an adapter cannot honour.
+
+    Checked here, while reading configuration, rather than when a task starts: nothing has been
+    spent yet, and an incompatible binding is a mistake in a file rather than an event in a review.
+    """
+    path = directory / "models.yaml"
+    raw = load_yaml_mapping(path)
+    roles = raw.get("roles") or {}
+    options = raw.get("backends") or {}
+    if not isinstance(roles, dict) or not isinstance(options, dict):
+        raise ConfigError(f"{path}: roles and backends must be mappings")
+    bindings: dict[Role, Binding] = {}
+    for name, entry in roles.items():
+        role = _role(str(name), path=path)
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{path}: the {role.value!r} binding must be a mapping")
+        backend = str(entry.get("backend") or "").strip()
+        model = str(entry.get("model") or "").strip()
+        if not backend or not model:
+            raise ConfigError(
+                f"{path}: the {role.value!r} binding needs both a backend and a model; a model "
+                "without a backend is not an address, because the backend decides which exist"
+            )
+        abilities = ABILITIES.get(backend)
+        if abilities is None:
+            known = ", ".join(sorted(ABILITIES))
+            raise ConfigError(f"{path}: unknown backend {backend!r} (known: {known})")
+        missing = abilities.missing(needs(role))
+        if missing:
+            lacking = ", ".join(ability.value for ability in missing)
+            raise ConfigError(
+                f"{path}: the {backend!r} backend cannot run the {role.value!r} role; it does not "
+                f"support {lacking}. Bind the role to a backend that does, or leave it unbound "
+                "until the adapter grows the ability."
+            )
+        backend_options = options.get(backend) or {}
+        if not isinstance(backend_options, dict):
+            raise ConfigError(f"{path}: options for backend {backend!r} must be a mapping")
+        bindings[role] = Binding(
+            role=role, backend=backend, model=model, options=dict(backend_options)
+        )
+    if not bindings:
+        raise ConfigError(f"{path}: no role is bound to a backend, so no task could run")
+    return Models(bindings=bindings)
+
+
+def _role(name: str, *, path: Path) -> Role:
+    try:
+        return Role(name)
+    except ValueError:
+        known = ", ".join(role.value for role in Role)
+        raise ConfigError(f"{path}: unknown role {name!r} (known roles: {known})") from None
 
 
 def _read_budget(

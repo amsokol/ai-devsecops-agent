@@ -32,8 +32,9 @@ not name is a configuration error, because a gate running on unverified knowledg
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
 
-Local Cursor runs on a machine that cannot provide the SDK sandbox need `sandbox: false` in
-`agent/config/execution.yaml` (or a `--config-dir` copy). The shipped default keeps the sandbox on.
+Local Cursor runs on a machine that cannot provide the SDK sandbox need `sandbox: false` under
+`backends: cursor:` in `agent/config/models.yaml` (or a `--config-dir` copy). The shipped default
+keeps the sandbox on.
 
 `--plan-only` builds and prints the plan without executing tasks, which is the way to see what a
 trigger would do. Add `--json` to print the run manifest instead of a summary, and `--no-cache` to
@@ -65,6 +66,25 @@ Exit codes are an interface, because CI acts on them: `0` permitted, `5` blocked
 `64` configuration error, `2` internal failure. A run that could not execute its tasks exits `6` and
 never `0` — the absence of a result is not a result.
 
+## Roles and models
+
+A task runs as a role, and `agent/config/models.yaml` says which backend and model answers for each
+one. A model is named as a pair, because the backend decides which models exist: `composer-2.5` alone
+is not an address. Only the roles a plan reaches are ever created, so a binding to an SDK this machine
+has not installed costs nothing until something needs it — one configuration serves a laptop and a
+pipeline.
+
+What a role *requires* is not configurable. An analyst that cannot call the tool registry has nothing
+to establish a fact with, and a fixer that cannot modify files cannot fix anything, so those needs
+live in `agent/roles.py` next to the code that has them. Each adapter declares what it implements, and
+a binding whose backend falls short is a startup error naming the missing ability. That is why there is
+no `fixer` binding yet: the Cursor adapter gives a session its own task directory and never the
+repository, so binding one today would be a maintenance run that opened issues and fixed nothing.
+
+One model everywhere for now. Choosing per role before the eval harness exists would be taste with a
+version number attached. The manifest records which pair each role was bound to, so a later comparison
+has something to compare.
+
 ## Budgets
 
 Analysis tasks are independent, so they run concurrently, and `agent/config/execution.yaml` states
@@ -89,10 +109,11 @@ large change would turn real analysis into `exhausted` and teach the team to dis
 
 ## Status
 
-Stage 4: concurrency and budgets are in place on top of the decision path, the tool registry and the
-Cursor SDK adapter. Every analyst capability the library defines can run, a run can still be narrowed
-with `--only` (for example `deps-vuln@python-uv`), and GitHub actions, the `fixer` role and the eval
-harness are still ahead. `backend: fake` remains available for CI that must exercise the pipeline
+Stage 5: roles are bound to backends and models in configuration, and a binding an adapter cannot
+honour fails at startup. On top of the decision path, the tool registry, the Cursor SDK adapter,
+concurrency and budgets, every analyst capability the library defines can run, and a run can still be
+narrowed with `--only` (for example `deps-vuln@python-uv`). GitHub actions, the `fixer` role and the
+eval harness are still ahead. `backend: fake` remains available for CI that must exercise the pipeline
 without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains

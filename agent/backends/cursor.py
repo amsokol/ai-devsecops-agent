@@ -134,8 +134,8 @@ class CursorBackend:
             # session fails the same way, and the SDK's wording does not say which file to change.
             detail = (
                 "this environment cannot provide the Cursor local sandbox. Set `sandbox: false` "
-                "in agent/config/execution.yaml (or a --config-dir copy of it) to run without it — "
-                "that is a deliberate decision, not a silent downgrade. Original: "
+                "under `backends: cursor:` in agent/config/models.yaml (or a --config-dir copy of "
+                "it) to run without it — a deliberate decision, not a silent downgrade. Original: "
                 f"{error}"
             )
         return SessionResult(

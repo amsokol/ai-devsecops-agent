@@ -11,7 +11,8 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent.backends.port import Backend, Brief, Budget, Failure, SessionResult
+from agent.backends.port import Brief, Budget, Failure, SessionResult
+from agent.backends.select import Roster
 from agent.brief import compose, digest, knowledge_for, role_instructions
 from agent.budget import Ledger, RunBudget
 from agent.domain import Outcome, Plan, PlannedTask, Reason
@@ -63,7 +64,7 @@ class Executed:
 async def execute(
     plan: Plan,
     *,
-    backend: Backend,
+    roster: Roster,
     library: Library,
     notes: str,
     evidence: EvidenceStore,
@@ -96,7 +97,7 @@ async def execute(
                 return
             executed = await _execute_one(
                 task,
-                backend=backend,
+                roster=roster,
                 library=library,
                 notes=notes,
                 evidence=evidence,
@@ -115,7 +116,7 @@ async def execute(
 async def _execute_one(
     task: PlannedTask,
     *,
-    backend: Backend,
+    roster: Roster,
     library: Library,
     notes: str,
     evidence: EvidenceStore,
@@ -134,7 +135,7 @@ async def _execute_one(
         return await _attempts(
             task,
             executed=executed,
-            backend=backend,
+            roster=roster,
             instructions=instructions,
             knowledge=knowledge,
             notes=notes,
@@ -154,7 +155,7 @@ async def _attempts(
     task: PlannedTask,
     *,
     executed: Executed,
-    backend: Backend,
+    roster: Roster,
     instructions: str,
     knowledge: tuple[tuple[str, str], ...],
     notes: str,
@@ -180,7 +181,7 @@ async def _attempts(
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "prompt.md").write_text(prompt, encoding="utf-8")
 
-        session = await backend.execute(
+        session = await roster.for_role(task.role).execute(
             Brief(
                 task=task,
                 prompt=prompt,
