@@ -437,6 +437,34 @@ def test_a_change_that_introduces_the_overlay_is_read_from_the_change_and_says_s
     assert any("has no overlay" in warning for warning in record.manifest.warnings)
 
 
+def test_a_change_that_migrates_the_overlay_is_read_from_the_change_and_says_so(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """Otherwise the overlay's shape could never change again.
+
+    Every change to it would need a run that already understood the new shape, and the run reads the
+    old one from the base. Nothing is given away: the base is the default branch, which a change
+    under review cannot rewrite.
+    """
+    inside = settled(git_repo, overlay_root)
+    commit(
+        git_repo, ".devsecops/agent.yaml", "schema: 1\nfrom_an_older_agent: true\n", branch="main"
+    )
+    commit(git_repo, "src/api.py", "value = 1\n")
+    commit(
+        git_repo,
+        ".devsecops/agent.yaml",
+        (overlay_root / "agent.yaml").read_text(encoding="utf-8"),
+    )
+
+    record = reviewed(git_repo, inside, library_root, config_dir, tmp_path / "runs")
+
+    assert record.manifest.overlay["origin"] == "checkout"
+    assert record.manifest.overlay["quarantine_days"] == 7
+    assert any("cannot read the overlay on the base" in note for note in record.manifest.warnings)
+    assert "cannot read the overlay on the base" in record.report
+
+
 def test_an_overlay_kept_outside_the_repository_is_read_as_it_is(
     git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
 ) -> None:

@@ -104,9 +104,13 @@ def _overlay_for(
     reporting a pass. The change is still reviewed in full; it just does not get to write the rules
     it is judged by.
 
-    Two cases legitimately fall back to the checkout, and both say so. An overlay kept outside the
-    repository is not part of any change, so there is nothing to protect it from. A base that has no
-    overlay is a change introducing one, and there is no earlier version to prefer.
+    Three cases legitimately fall back to the checkout, and all three say so. An overlay kept
+    outside the repository is not part of any change, so there is nothing to protect it from. A base
+    with no overlay is a change introducing one, and there is no earlier version to prefer. And a
+    base whose overlay this agent cannot read is a change that migrates it: refusing there would
+    mean an overlay's shape could never change again, because every such change would need a run
+    that already understood the new shape. Nothing is given away — the base is the default branch,
+    which a change under review cannot rewrite.
     """
     load = partial(
         Overlay.load,
@@ -117,13 +121,23 @@ def _overlay_for(
     if base is None:
         return load(), ""
 
-    committed = Overlay.at(
-        repository,
-        repository.merge_base(base),
-        path=request.overlay_path,
-        library=library,
-        notes_limit=config.notes_limit,
-    )
+    unreadable = ""
+    try:
+        committed = Overlay.at(
+            repository,
+            repository.merge_base(base),
+            path=request.overlay_path,
+            library=library,
+            notes_limit=config.notes_limit,
+        )
+    except ConfigError as error:
+        committed, unreadable = None, str(error)
+    if committed is None and unreadable:
+        return load(), (
+            "this agent cannot read the overlay on the base of this change, so the run obeyed the "
+            f"copy the change brings ({unreadable}). A migration of the overlay takes effect on "
+            "merge, and until then the change sets the rules it is judged by"
+        )
     if committed is None:
         if not within(repository.path, request.overlay_path):
             return load(), ""

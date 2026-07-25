@@ -50,4 +50,8 @@ The first release is not cut yet, so this section is the whole history: what the
   each with its own models and limits — because a product outlives any one provider and switching
   should be one line, not a fork of the agent's configuration.
 - A review reads the overlay from the merge base, so a change cannot rewrite the rules it is judged
-  by. Where the two differ, the report says so in its first line.
+  by. Where the two differ, the report says so in its first line. A base whose overlay this agent
+  cannot read is the exception, and also says so: without it, the shape of an overlay could never
+  change again, because every such change would need a run that already understood the new shape.
+- The pinned knowledge library is `0.3.0`, the first release whose overlay is organised by kind of
+  run.
