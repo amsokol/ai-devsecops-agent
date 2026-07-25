@@ -40,6 +40,8 @@ class TaskRecord:
     attempts: list[dict[str, Any]] = field(default_factory=list)
     """Every session run for this task, including rejected results — otherwise a retried task looks
     identical to one that worked first time, and the prompt that failed is unrecoverable."""
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    """The task's tool calls, in order, so a fact can be traced to what produced it."""
     notes: str = ""
 
     def as_json(self) -> dict[str, Any]:
@@ -54,6 +56,7 @@ class TaskRecord:
             "outcome": self.outcome.value if self.outcome else None,
             "reason": self.reason.value if self.reason else None,
             "attempts": self.attempts,
+            "calls": self.calls,
             "notes": self.notes,
         }
 
@@ -86,6 +89,8 @@ class Manifest:
         default_factory=lambda: {"known": False, "tokens": None, "money": None}
     )
     warnings: list[str] = field(default_factory=list)
+    partial: list[str] = field(default_factory=list)
+    """Set when a run was narrowed to named tasks, so nobody reads its verdict as the playbook's."""
     result: str = "unknown"
     finished_at: str | None = None
 
@@ -163,6 +168,7 @@ class Manifest:
             "tool_versions": self.tool_versions,
             "cost": self.cost,
             "warnings": self.warnings,
+            "partial": self.partial,
         }
 
     def write(self, run_dir: Path) -> Path:

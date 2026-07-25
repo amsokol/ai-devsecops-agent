@@ -10,16 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent.backends.port import (
-    Backend,
-    Brief,
-    Budget,
-    Failure,
-    ToolEndpoint,
-)
-from agent.backends.port import (
-    Session as BackendSession,
-)
+from agent.backends.port import Backend, Brief, Budget, Failure, SessionResult
 from agent.brief import compose, digest, knowledge_for, role_instructions
 from agent.domain import Outcome, Plan, PlannedTask, Reason
 from agent.errors import ConfigError
@@ -27,6 +18,7 @@ from agent.evidence import EvidenceStore
 from agent.findings import Finding
 from agent.library import Library
 from agent.results import InvalidResult, TaskResult, read_result
+from agent.toolkit import Toolkit, Toolkits
 from agent.verdict import TaskOutcome
 
 MAX_ATTEMPTS = 2
@@ -37,7 +29,7 @@ shown it cannot produce a valid result, and delay the honest `unverified` that f
 @dataclass(slots=True)
 class Attempt:
     number: int
-    session: BackendSession
+    session: SessionResult
     prompt_digest: str
     result_path: Path
     rejected: str = ""
@@ -59,6 +51,8 @@ class Executed:
     outcome: TaskOutcome
     result: TaskResult | None = None
     attempts: list[Attempt] = field(default_factory=list)
+    calls: list[dict[str, object]] = field(default_factory=list)
+    """Every tool call the task made, so a reader can see how a fact was obtained."""
 
     @property
     def findings(self) -> tuple[Finding, ...]:
@@ -73,9 +67,8 @@ async def execute(
     notes: str,
     evidence: EvidenceStore,
     tasks_dir: Path,
-    workdir: Path,
     budget: Budget,
-    endpoint: ToolEndpoint | None = None,
+    toolkits: Toolkits,
 ) -> list[Executed]:
     """Run every planned task in order.
 
@@ -90,9 +83,8 @@ async def execute(
             notes=notes,
             evidence=evidence,
             tasks_dir=tasks_dir,
-            workdir=workdir,
             budget=budget,
-            endpoint=endpoint,
+            toolkits=toolkits,
         )
         for task in plan.tasks
     ]
@@ -106,15 +98,50 @@ async def _execute_one(
     notes: str,
     evidence: EvidenceStore,
     tasks_dir: Path,
-    workdir: Path,
     budget: Budget,
-    endpoint: ToolEndpoint | None,
+    toolkits: Toolkits,
 ) -> Executed:
     instructions = role_instructions(task.role)
     knowledge = knowledge_for(library, task)
+    # One toolkit for the task, not per attempt: a fact established before a result was rejected is
+    # still a fact, and the retry can cite it instead of paying for the call again.
+    toolkit = toolkits.for_task(task)
     executed = Executed(task=task, outcome=_unverified(task, Reason.UNAVAILABLE))
     rejection = ""
+    try:
+        return await _attempts(
+            task,
+            executed=executed,
+            backend=backend,
+            instructions=instructions,
+            knowledge=knowledge,
+            notes=notes,
+            evidence=evidence,
+            tasks_dir=tasks_dir,
+            budget=budget,
+            toolkit=toolkit,
+            rejection=rejection,
+        )
+    finally:
+        # Recorded whatever happened, including for a task that failed: how a fact was obtained is
+        # exactly what a reader needs when the answer is surprising.
+        executed.calls = toolkit.as_json()
 
+
+async def _attempts(
+    task: PlannedTask,
+    *,
+    executed: Executed,
+    backend: Backend,
+    instructions: str,
+    knowledge: tuple[tuple[str, str], ...],
+    notes: str,
+    evidence: EvidenceStore,
+    tasks_dir: Path,
+    budget: Budget,
+    toolkit: Toolkit,
+    rejection: str,
+) -> Executed:
     for number in range(1, MAX_ATTEMPTS + 1):
         directory = tasks_dir / task.id / f"attempt-{number}"
         result_path = directory / "result.json"
@@ -124,6 +151,7 @@ async def _execute_one(
             knowledge=knowledge,
             notes=notes,
             result_path=result_path,
+            tools=tuple((tool.name, tool.description) for tool in toolkit.tools()),
             attempt=number,
             invalid_reason=rejection,
         )
@@ -135,9 +163,9 @@ async def _execute_one(
                 task=task,
                 prompt=prompt,
                 result_path=result_path,
-                workdir=workdir,
+                workspace=directory,
                 budget=budget,
-                endpoint=endpoint,
+                toolkit=toolkit,
                 attempt=number,
             )
         )

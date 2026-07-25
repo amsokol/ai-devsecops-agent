@@ -88,6 +88,15 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         help="ignore the cache of immutable facts, to prove a verdict reproduces without it",
     )
     parser.add_argument(
+        "--only",
+        action="append",
+        metavar="TASK",
+        help=(
+            "run only this planned task, repeatable. For development: the verdict then covers the "
+            "named tasks and nothing else, and the run says so"
+        ),
+    )
+    parser.add_argument(
         "--json", action="store_true", help="print the manifest instead of a summary"
     )
 
@@ -136,6 +145,7 @@ def _request(arguments: argparse.Namespace) -> Request:
         wake_issue=getattr(arguments, "wake_issue", None),
         plan_only=arguments.plan_only,
         use_cache=not arguments.no_cache,
+        only=tuple(arguments.only or ()),
     )
 
 

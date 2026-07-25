@@ -10,13 +10,18 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.backends import Brief, Budget, Failure, FakeBackend, Scripted, Session
+from agent.backends import Brief, Budget, Failure, FakeBackend, Scripted, SessionResult
 from agent.domain import Outcome, Plan, PlannedTask, Reason, Role, Trigger
 from agent.evidence import Evidence, EvidenceStore, Origin, Subject
 from agent.executor import Executed, execute
 from agent.library import Library
+from agent.session import Session
+from agent.storage import FactCache
+from agent.toolkit import Toolkits
+from agent.tools import Grants
 
 BUDGET = Budget(seconds=60)
+MOMENT = datetime(2026, 7, 25, tzinfo=UTC)
 SUBJECT = Subject(ecosystem="ecosystems/python-uv", package="httpx", version="0.28.1")
 
 
@@ -29,7 +34,7 @@ def store_with_a_fact() -> EvidenceStore:
             value=["GHSA-xxxx"],
             origin=Origin.TOOL,
             source="pip-audit",
-            observed_at=datetime(2026, 7, 1, tzinfo=UTC),
+            observed_at=MOMENT,
         )
     )
     return store
@@ -55,18 +60,25 @@ def plan_of(task_id: str = "deps-vuln") -> Plan:
 def run(
     backend: FakeBackend, library: Library, tmp_path: Path, *, evidence: EvidenceStore | None = None
 ) -> list[Executed]:
+    # `or` would be wrong here: an empty store is falsy, which is exactly the case one test needs.
+    store = store_with_a_fact() if evidence is None else evidence
+    session = Session(
+        repository=tmp_path,
+        grants=Grants(binaries=frozenset(), hosts=frozenset()),
+        cache=FactCache(None, writable=False),
+        scratch_root=tmp_path / "scratch",
+    )
+    session.evidence = store
     return asyncio.run(
         execute(
             plan_of(),
             backend=backend,
             library=library,
             notes="Only the API service is in scope.",
-            # `or` would be wrong here: an empty store is falsy, which is exactly the case one test
-            # needs.
-            evidence=store_with_a_fact() if evidence is None else evidence,
+            evidence=store,
             tasks_dir=tmp_path / "tasks",
-            workdir=tmp_path,
             budget=BUDGET,
+            toolkits=Toolkits(session=session, now=MOMENT, quarantine_days=7),
         )
     )
 
@@ -145,7 +157,7 @@ def test_a_second_attempt_that_works_is_accepted(library: Library, tmp_path: Pat
     ]
 
     class Sequenced(FakeBackend):
-        async def execute(self, brief: Brief) -> Session:
+        async def execute(self, brief: Brief) -> SessionResult:
             self.default = answers[brief.attempt - 1]
             return await super().execute(brief)
 

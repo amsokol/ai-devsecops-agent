@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 from agent.domain import PlannedTask, Reason
+from agent.toolkit import Toolkit
 
 
 class Failure(StrEnum):
@@ -71,14 +72,6 @@ class Usage:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolEndpoint:
-    """Where a subagent reaches the agent's own tools, and the token that lets it in."""
-
-    url: str
-    token: str
-
-
-@dataclass(frozen=True, slots=True)
 class Brief:
     """Everything a subagent is given: its task, its prompt, where to write, what it may spend.
 
@@ -90,14 +83,23 @@ class Brief:
     task: PlannedTask
     prompt: str
     result_path: Path
-    workdir: Path
+
+    workspace: Path
+    """The only directory the backend's own file and shell tools may see.
+
+    Deliberately the task's own directory and not the repository. An SDK brings its own tools, and
+    a subagent that read the repository through them would bypass the never-send list and produce
+    facts with no call behind them. The repository is reachable only through `toolkit`. The result
+    file is written here, which is the one thing those native tools are for.
+    """
+
     budget: Budget
-    endpoint: ToolEndpoint | None = None
+    toolkit: Toolkit
     attempt: int = 1
 
 
 @dataclass(frozen=True, slots=True)
-class Session:
+class SessionResult:
     """What a backend reports back. The result itself is in `Brief.result_path`, not here."""
 
     backend: str
@@ -128,6 +130,6 @@ class Backend(Protocol):
 
     name: str
 
-    async def execute(self, brief: Brief) -> Session: ...
+    async def execute(self, brief: Brief) -> SessionResult: ...
 
     async def close(self) -> None: ...

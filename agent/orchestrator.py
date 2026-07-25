@@ -8,15 +8,17 @@ and anything that fails validation is recorded as "did not run" rather than as "
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agent import __version__
-from agent.backends.port import Backend, Budget, ToolEndpoint
+from agent.backends.port import Backend, Budget
 from agent.backends.select import make_backend
 from agent.config import Config
-from agent.domain import Trigger
-from agent.errors import ExitCode
+from agent.domain import Plan, Trigger
+from agent.errors import ConfigError, ExitCode
+from agent.evidence import EvidenceStore
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
 from agent.library import Library
@@ -28,6 +30,7 @@ from agent.repo import Repository
 from agent.report import render
 from agent.session import Session
 from agent.storage import FactCache
+from agent.toolkit import Toolkits
 from agent.tools import grant
 from agent.verdict import Verdict, decide, judge
 
@@ -48,6 +51,9 @@ class Request:
     wake_issue: int | None = None
     plan_only: bool = False
     use_cache: bool = True
+    only: tuple[str, ...] = ()
+    """Task identifiers to run, for development. A run so narrowed says so in its manifest and in
+    its report: its verdict describes the tasks it ran and cannot stand for the whole playbook."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +63,24 @@ class RunRecord:
     exit_code: ExitCode
     verdict: Verdict | None = None
     report: str = ""
+
+
+def _narrow(plan: Plan, only: tuple[str, ...]) -> Plan:
+    """Keep the named tasks, and refuse a name that matches nothing.
+
+    A typo that silently ran nothing would produce a run that looks like a pass, which is the one
+    outcome this project cannot afford to make easy.
+    """
+    known = {task.id for task in plan.tasks}
+    unknown = [name for name in only if name not in known]
+    if unknown:
+        available = ", ".join(sorted(known))
+        raise ConfigError(f"no planned task named {', '.join(unknown)}. This plan has: {available}")
+    kept = tuple(task for task in plan.tasks if task.id in set(only))
+    dropped = tuple(
+        (task.capability, "narrowed by --only") for task in plan.tasks if task not in kept
+    )
+    return replace(plan, tasks=kept, skipped=plan.skipped + dropped)
 
 
 def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
@@ -92,6 +116,9 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
         change=change,
     )
 
+    if request.only:
+        plan = _narrow(plan, request.only)
+
     manifest = Manifest.start(
         agent_version=__version__,
         plan=plan,
@@ -117,6 +144,13 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
         },
     )
     manifest.warnings.extend(overlay.warnings)
+    if request.only:
+        manifest.partial = list(request.only)
+        manifest.warnings.append(
+            "this run was narrowed to "
+            + ", ".join(request.only)
+            + ": its verdict covers those tasks and nothing else"
+        )
     if not manifest.library["pinned"]:
         manifest.warnings.append(
             "the library is not pinned: this run cannot prove which knowledge it used"
@@ -147,30 +181,34 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
         grants=grants,
         cache=cache,
         scratch_root=run_directory / "scratch",
+        never_send=config.never_send,
     )
 
     owned = backend is None
     backend = backend or make_backend(config.execution)
-    endpoint: ToolEndpoint | None = None
-    try:
-        executed = asyncio.run(
-            execute(
-                plan,
-                backend=backend,
-                library=library,
-                notes=overlay.notes,
-                evidence=session.evidence,
-                tasks_dir=run_directory / "tasks",
-                workdir=repository.path,
-                budget=Budget(
-                    seconds=config.execution.task_seconds, steps=config.execution.task_steps
-                ),
-                endpoint=endpoint,
-            )
+    # One clock for the whole run: quarantine arithmetic that moved between two tasks of the same
+    # run would make the verdict depend on how long the earlier tasks took.
+    toolkits = Toolkits(
+        session=session,
+        now=datetime.now(UTC),
+        quarantine_days=overlay.quarantine_days,
+    )
+    # One event loop for execution and shutdown alike. A backend that holds a subprocess cannot be
+    # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
+    # fails with a future attached to another loop.
+    executed = asyncio.run(
+        _execute(
+            plan,
+            backend=backend,
+            library=library,
+            notes=overlay.notes,
+            evidence=session.evidence,
+            tasks_dir=run_directory / "tasks",
+            budget=Budget(seconds=config.execution.task_seconds, steps=config.execution.task_steps),
+            toolkits=toolkits,
+            close=owned,
         )
-    finally:
-        if owned:
-            asyncio.run(backend.close())
+    )
 
     verdict = _conclude(manifest, executed, rules=rules, session=session)
     report = render(
@@ -189,6 +227,34 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     return RunRecord(manifest, manifest_path, verdict.result.exit_code, verdict, report)
 
 
+async def _execute(
+    plan: Plan,
+    *,
+    backend: Backend,
+    library: Library,
+    notes: str,
+    evidence: EvidenceStore,
+    tasks_dir: Path,
+    budget: Budget,
+    toolkits: Toolkits,
+    close: bool,
+) -> list[Executed]:
+    try:
+        return await execute(
+            plan,
+            backend=backend,
+            library=library,
+            notes=notes,
+            evidence=evidence,
+            tasks_dir=tasks_dir,
+            budget=budget,
+            toolkits=toolkits,
+        )
+    finally:
+        if close:
+            await backend.close()
+
+
 def _conclude(
     manifest: Manifest, executed: list[Executed], *, rules: BlockingRules, session: Session
 ) -> Verdict:
@@ -200,6 +266,7 @@ def _conclude(
         record.outcome = item.outcome.outcome
         record.reason = item.outcome.reason
         record.attempts = [attempt.as_json() for attempt in item.attempts]
+        record.calls = item.calls
         record.notes = item.result.notes if item.result else ""
         findings.extend(item.findings)
         for attempt in item.attempts:

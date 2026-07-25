@@ -1,15 +1,7 @@
 """Backends: agent SDKs behind one narrow port."""
 
 from agent.backends.fake import FakeBackend, Scripted
-from agent.backends.port import (
-    Backend,
-    Brief,
-    Budget,
-    Failure,
-    Session,
-    ToolEndpoint,
-    Usage,
-)
+from agent.backends.port import Backend, Brief, Budget, Failure, SessionResult, Usage
 
 __all__ = [
     "Backend",
@@ -18,7 +10,6 @@ __all__ = [
     "Failure",
     "FakeBackend",
     "Scripted",
-    "Session",
-    "ToolEndpoint",
+    "SessionResult",
     "Usage",
 ]

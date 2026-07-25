@@ -101,6 +101,13 @@ class Execution:
     model: str
     task_seconds: int
     task_steps: int | None
+    sandbox: bool = True
+    """Whether the backend confines its own tools with the SDK's sandbox.
+
+    Defence in depth rather than the main guard: a subagent already sees only its own task directory
+    through those tools. Environments that cannot sandbox have to say so explicitly, because a
+    silent downgrade is how a run ends up with fewer guarantees than its manifest claims.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,11 +179,15 @@ def _read_execution(directory: Path) -> Execution:
         raise ConfigError(f"{path}: budget must be a mapping")
     seconds = _positive(budget.get("task_seconds", 900), path=path, name="task_seconds")
     steps = budget.get("task_steps")
+    sandbox = raw.get("sandbox", True)
+    if not isinstance(sandbox, bool):
+        raise ConfigError(f"{path}: sandbox must be true or false, got {sandbox!r}")
     return Execution(
         backend=str(raw.get("backend") or "").strip() or _missing(path, "backend"),
         model=str(raw.get("model") or "").strip() or _missing(path, "model"),
         task_seconds=seconds,
         task_steps=_positive(steps, path=path, name="task_steps") if steps is not None else None,
+        sandbox=sandbox,
     )
 
 

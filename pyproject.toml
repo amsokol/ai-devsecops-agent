@@ -11,6 +11,11 @@ dependencies = [
 [project.scripts]
 agent = "agent.cli:main"
 
+[project.optional-dependencies]
+cursor = [
+    "cursor-sdk>=1.0.24",
+]
+
 [build-system]
 requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"

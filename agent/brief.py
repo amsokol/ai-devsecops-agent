@@ -19,6 +19,24 @@ from agent.library import Library
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
+TOOL_PROTOCOL = """\
+These tools are how you learn anything, and how a fact becomes citable. The sequence is always the
+same:
+
+1. `known_fact` first — the run may already have the answer, and a repeat call buys nothing.
+2. Acquire it: run a command, or fetch a URL. Every call returns a `call` identifier.
+3. `record_fact` with the question, the subject, the value and the identifiers of the calls it rests
+   on. It returns an evidence key.
+4. Put that key in the finding's `evidence`.
+
+A key exists only because a call happened, so a finding you cannot support has nothing to cite and
+must not be reported. When acquisition fails, `record_gap` with the reason — that is the honest
+answer and the run reports it as a gap rather than as a clean result.
+
+Some tools will refuse: a binary the ecosystem did not declare, a host that is not allowlisted, a
+path on the never-send list. A refusal is an answer, not an obstacle to work around — record the gap
+and move on. Do not attempt the same thing through another tool."""
+
 RESULT_SHAPE = """\
 ```json
 {
@@ -73,6 +91,7 @@ def compose(
     knowledge: tuple[tuple[str, str], ...],
     notes: str,
     result_path: Path,
+    tools: tuple[tuple[str, str], ...] = (),
     attempt: int = 1,
     invalid_reason: str = "",
 ) -> str:
@@ -100,6 +119,11 @@ def compose(
             "easier — if a finding has no evidence key, the finding should not be there at all.",
             "",
         ]
+
+    if tools:
+        parts += ["### Tools", "", TOOL_PROTOCOL, ""]
+        parts += [f"* `{name}` — {description}" for name, description in tools]
+        parts.append("")
 
     parts += ["### Result shape", "", RESULT_SHAPE, ""]
 

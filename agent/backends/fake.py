@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.backends.port import Brief, Failure, Session, Usage
+from agent.backends.port import Brief, Failure, SessionResult, Usage
 
 MODEL = "fake"
 
@@ -44,7 +44,7 @@ class FakeBackend:
         self.briefs: list[Brief] = []
         self._on_execute = on_execute
 
-    async def execute(self, brief: Brief) -> Session:
+    async def execute(self, brief: Brief) -> SessionResult:
         self.briefs.append(brief)
         if self._on_execute is not None:
             self._on_execute(brief)
@@ -57,7 +57,7 @@ class FakeBackend:
                 else json.dumps(scripted.result, ensure_ascii=False)
             )
             brief.result_path.write_text(text, encoding="utf-8")
-        return Session(
+        return SessionResult(
             backend=self.name,
             model=MODEL,
             duration_ms=1,

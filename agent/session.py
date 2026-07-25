@@ -33,18 +33,20 @@ class Session:
         grants: Grants,
         cache: FactCache,
         scratch_root: Path,
+        never_send: tuple[str, ...] = (),
     ) -> None:
         self.repository = repository
         self.grants = grants
         self.cache = cache
         self.evidence = EvidenceStore()
+        self._never_send = never_send
         self._scratch_root = scratch_root
 
     def for_task(self, task_id: str) -> TaskTools:
         scratch = self._scratch_root / task_id
         scratch.mkdir(parents=True, exist_ok=True)
         return TaskTools(
-            files=FileTools(root=self.repository),
+            files=FileTools(root=self.repository, never_send=self._never_send),
             commands=CommandRunner(grants=self.grants, workdir=self.repository, scratch=scratch),
             http=HttpClient(grants=self.grants),
             scratch=scratch,
