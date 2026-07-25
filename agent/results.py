@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent.domain import FixOutcome, Outcome, Reason
+from agent.domain import AnswerOutcome, FixOutcome, Intent, Outcome, Reason
 from agent.evidence import Subject
 from agent.findings import Finding, Klass, Location, Severity
 
@@ -26,6 +26,8 @@ STATEABLE_REASONS = frozenset(
 )
 _RESULT_KEYS = frozenset({"outcome", "reason", "findings", "notes"})
 _FIX_KEYS = frozenset({"outcome", "reason", "notes"})
+_INTENT_KEYS = frozenset({"intent", "confident", "gist"})
+_ANSWER_KEYS = frozenset({"outcome", "reason", "reply"})
 _FINDING_KEYS = frozenset(
     {
         "capability",
@@ -160,6 +162,72 @@ def read_fix_result(path: Path) -> FixResult:
     return FixResult(outcome=outcome, notes=notes, reason=reason)
 
 
+@dataclass(frozen=True, slots=True)
+class Classification:
+    """What a comment was read as. The action it leads to is chosen by code, not stated here."""
+
+    intent: Intent
+    confident: bool
+    gist: str
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "intent": self.intent.value,
+            "confident": self.confident,
+            "gist": self.gist,
+        }
+
+
+def read_classification(path: Path) -> Classification:
+    """Parse and validate a classifier's result.
+
+    `confident` is required rather than defaulted. A model that omits it would be read as sure, and
+    the whole point of the field is that being unsure is a safe answer somebody has to give on
+    purpose.
+    """
+    raw = _document(path, keys=_INTENT_KEYS)
+    intent = _enum(Intent, raw.get("intent"), path=path, field_name="intent")
+    confident = raw.get("confident")
+    if not isinstance(confident, bool):
+        raise InvalidResult(f"{path}: confident is required and must be true or false")
+    gist = str(raw.get("gist") or "").strip()
+    if not gist:
+        raise InvalidResult(f"{path}: gist is required — one sentence of what was asked for")
+    return Classification(intent=intent, confident=confident, gist=gist)
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerResult:
+    """What an answering session produced: prose for a person, or an honest inability."""
+
+    outcome: AnswerOutcome
+    reply: str = ""
+    reason: Reason | None = None
+
+
+def read_answer(path: Path) -> AnswerResult:
+    raw = _document(path, keys=_ANSWER_KEYS)
+    outcome = _enum(AnswerOutcome, raw.get("outcome"), path=path, field_name="outcome")
+    reason = (
+        _enum(Reason, raw["reason"], path=path, field_name="reason")
+        if raw.get("reason") is not None
+        else None
+    )
+    if reason is not None and reason not in STATEABLE_REASONS:
+        allowed = ", ".join(sorted(item.value for item in STATEABLE_REASONS))
+        raise InvalidResult(
+            f"{path}: reason {reason.value!r} is not one a task may state ({allowed})"
+        )
+    if outcome is AnswerOutcome.UNVERIFIED and reason is None:
+        raise InvalidResult(f"{path}: outcome 'unverified' requires a reason")
+    if outcome is AnswerOutcome.EXHAUSTED:
+        reason = Reason.EXHAUSTED
+    reply = str(raw.get("reply") or "").strip()
+    if outcome is AnswerOutcome.ANSWERED and not reply:
+        raise InvalidResult(f"{path}: outcome 'answered' requires a reply — it is the whole answer")
+    return AnswerResult(outcome=outcome, reply=reply, reason=reason)
+
+
 def _document(path: Path, *, keys: frozenset[str]) -> dict[str, Any]:
     if not path.is_file():
         raise InvalidResult(f"{path} was not written")
@@ -247,7 +315,7 @@ def _location(raw: Any, *, where: str) -> Location | None:
     return Location(path=str(raw["path"]), line=int(line) if line is not None else None)
 
 
-def _enum[T: (Outcome, FixOutcome, Reason, Klass, Severity)](
+def _enum[T: (Outcome, FixOutcome, AnswerOutcome, Intent, Reason, Klass, Severity)](
     kind: type[T], value: Any, *, path: Path, field_name: str
 ) -> T:
     if value is None:

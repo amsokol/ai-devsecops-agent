@@ -85,6 +85,11 @@ class Manifest:
     """Which blocking table this run applied, so a verdict can be checked against the knowledge."""
     budget: dict[str, Any] = field(default_factory=dict)
     """The limits this run was given and what it spent, so an `exhausted` task is explainable."""
+    wake: dict[str, Any] = field(default_factory=dict)
+    """What woke the run when somebody's comment did: whose it was, which conversation, how it was
+    read and which course that led to. The classification is recorded even when the run then
+    refused to act on it: "the agent read this as a question" is the part somebody will argue
+    with."""
     roles: list[dict[str, str]] = field(default_factory=list)
     """Which backend and model each role the plan needed, checked before anything was spent."""
     fixes: list[dict[str, Any]] = field(default_factory=list)
@@ -132,7 +137,17 @@ class Manifest:
             overlay=overlay,
             started_at=at.isoformat(),
         )
-        manifest.tasks = [
+        manifest.replan(plan)
+        return manifest
+
+    def replan(self, plan: Plan) -> None:
+        """Record this plan as the one the run works from.
+
+        Called a second time when a wake narrows the plan to the finding somebody asked about. The
+        record then shows the tasks that actually ran, with the rest listed as skipped and why —
+        rather than a plan the run silently did not carry out.
+        """
+        self.tasks = [
             TaskRecord(
                 id=task.id,
                 capability=task.capability,
@@ -144,10 +159,9 @@ class Manifest:
             )
             for task in plan.tasks
         ]
-        manifest.skipped = [
+        self.skipped = [
             {"capability": capability, "reason": reason} for capability, reason in plan.skipped
         ]
-        return manifest
 
     def finish(self, result: str, at: datetime | None = None) -> None:
         self.result = result
@@ -177,6 +191,7 @@ class Manifest:
             "verdict": self.verdict,
             "policy": self.policy,
             "budget": self.budget,
+            "wake": self.wake,
             "roles": self.roles,
             "fixes": self.fixes,
             "remediation": self.remediation,

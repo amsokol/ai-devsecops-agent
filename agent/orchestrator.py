@@ -8,13 +8,14 @@ and anything that fails validation is recorded as "did not run" rather than as "
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from agent import __version__
+from agent.answer import Aftermath, Answered, answer, deliver, status_for
 from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
@@ -24,7 +25,8 @@ from agent.errors import ConfigError, ExitCode
 from agent.escalate import Escalation, weigh
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
-from agent.issues import track_findings
+from agent.intent import Course, Read, classify, narrow
+from agent.issues import Tracking, track_findings
 from agent.library import Library
 from agent.manifest import Manifest
 from agent.overlay import MAINTENANCE, REVIEW, VALUES_FILE, Overlay, digest_on_disk, within
@@ -32,22 +34,25 @@ from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
 from agent.propose import propose_fixes
 from agent.publish import publish_review
-from agent.reconcile import caution_for
+from agent.reconcile import caution_for, unproven
 from agent.remediate import BRANCH_PREFIX, Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
-from agent.scm import GitHub, Platform, ScmError
+from agent.scm import GitHub, Identity, Issue, Platform, ScmError
 from agent.session import Session
 from agent.state import Memory
 from agent.storage import FactCache
 from agent.toolkit import Toolkits
 from agent.tools import grant
 from agent.verdict import TaskOutcome, Verdict, decide, judge
+from agent.wake import Wake, Woken, admit
 
 PLANNED = "planned"
 DECLINED = "declined"
+ANSWERED = "answered"
+"""A run woken by a comment that replied to it. Not a verdict: nothing was judged and nothing was
+changed, so it is neither a pass nor a refusal, and it exits successfully either way."""
 REPORT = "report.md"
-BOT_SUFFIX = "[bot]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +65,10 @@ class Request:
     config_dir: Path | None = None
     base: str | None = None
     change: int | None = None
-    wake_issue: int | None = None
-    actor: str = ""
-    """The account whose action started this run. Given by whatever woke the agent, and checked
-    before anything is spent: an agent that answers its own comment answers it forever."""
+    wake: Wake | None = None
+    """Somebody's comment, when one started this run: whose it was, and which conversation. Checked
+    against the platform before anything is spent — an agent that answers its own comment answers it
+    forever, and an account with no write access is not who a budget answers to."""
     plan_only: bool = False
     dry_run: bool = False
     """Analyse and say what would be fixed, without creating a worktree, a branch or a commit."""
@@ -281,8 +286,13 @@ def run(
     # A maintenance run that is allowed to fix needs a `fixer` binding before it starts, not after
     # the analysis it just paid for: the alternative is a pass that reports findings and silently
     # never ships anything, which looks exactly like a week with nothing to fix.
+    # A wake needs both of its roles bound before it reads anything, even though only one of them
+    # will run: which one depends on what the comment turns out to ask for, and finding out that the
+    # answering model is unbound *after* classifying would leave a person with silence.
     may_fix = request.trigger.is_maintenance and not request.dry_run and not request.plan_only
     needed = {task.role for task in plan.tasks} | ({Role.FIXER} if may_fix else set())
+    if request.wake is not None:
+        needed |= {Role.INTENT, Role.WRITER}
     manifest.roles = [models.for_role(role).as_json() for role in sorted(needed)]
 
     # Recorded before the plan-only exit: seeing what a trigger would be allowed to spend is half
@@ -306,13 +316,21 @@ def run(
     speaker, speaks = _resolve(request, platform=platform, repository=repository)
     if speaks:
         manifest.warnings.append(f"nothing was published: {speaks}")
-    refusal = _woke_itself(request, platform=speaker)
-    if refusal:
-        # Recorded as a run, deliberately: "the agent declined to answer its own comment" is the
-        # property this check exists for, and a run that left no trace could not demonstrate it.
-        manifest.warnings.append(refusal)
-        manifest.finish(DECLINED)
-        return RunRecord(manifest, manifest.write(request.run_dir), ExitCode.OK)
+
+    woken: Woken | None = None
+    if request.wake is not None:
+        manifest.wake = request.wake.as_json()
+        admitted = admit(request.wake, platform=speaker, identity=_speaks_as(speaker))
+        if isinstance(admitted, str):
+            # Recorded as a run, deliberately: "the agent declined to answer its own comment" and
+            # "it does not take orders from an account without write access" are the properties
+            # these checks exist for, and a run that left no trace could not demonstrate them.
+            manifest.wake |= {"course": "none", "detail": admitted}
+            manifest.warnings.append(admitted)
+            manifest.finish(DECLINED)
+            return RunRecord(manifest, manifest.write(request.run_dir), ExitCode.OK)
+        woken = admitted
+        manifest.wake = woken.as_json()
 
     # Only a run on the default branch may write facts. A review runs on code a stranger proposed,
     # so it reads the cache and never feeds it.
@@ -359,9 +377,10 @@ def run(
                     f"({error}), and preparing branches blind would duplicate ones already open"
                 )
 
-    executed, verdict, fixes, queue = asyncio.run(
-        _perform(
+    performed = asyncio.run(
+        _conduct(
             plan,
+            woken=woken,
             manifest=manifest,
             roster=roster,
             library=library,
@@ -379,6 +398,23 @@ def run(
         )
     )
     manifest.budget["spend"] = ledger.spend.as_json()
+    if performed.read is not None:
+        manifest.wake |= performed.read.as_json()
+    _spent(manifest, performed)
+    if performed.verdict is None:
+        # A wake that answered or found nothing to do. There is no verdict, and inventing one would
+        # mean a question about a finding could pass or block a branch nobody proposed.
+        return _wrote_back(
+            request,
+            manifest=manifest,
+            performed=performed,
+            woken=woken,
+            platform=speaker,
+            cache=cache,
+            session=session,
+        )
+    verdict = performed.verdict
+    executed, fixes, queue = performed.executed, performed.fixes, performed.queue
     if queue is not None:
         manifest.fixes = [fix.as_json() for fix in fixes]
         manifest.remediation = queue.as_json()
@@ -418,6 +454,10 @@ def run(
             escalations=escalations,
             memory=remembered,
             document=document,
+            woken=woken,
+            asked=performed.read.classification.gist
+            if performed.read and performed.read.classification
+            else "",
         )
     elif request.publish:
         manifest.actions = {"failure": speaks}
@@ -430,7 +470,151 @@ def run(
     return RunRecord(manifest, manifest_path, verdict.result.exit_code, verdict, report)
 
 
+@dataclass(slots=True)
+class Performed:
+    """What the run's one event loop produced. A verdict, or the reason there is none."""
+
+    executed: list[Executed] = field(default_factory=list)
+    verdict: Verdict | None = None
+    fixes: list[Fix] = field(default_factory=list)
+    queue: Queue | None = None
+    read: Read | None = None
+    """How a comment was read, when one woke this run."""
+    answered: Answered | None = None
+    halted: str = ""
+    """Why the run stopped after reading the comment, when it did."""
+
+
+async def _conduct(
+    plan: Plan,
+    *,
+    woken: Woken | None,
+    manifest: Manifest,
+    roster: Roster,
+    library: Library,
+    overlay: Overlay,
+    session: Session,
+    rules: BlockingRules,
+    repository: Repository,
+    run_directory: Path,
+    budget: Budget,
+    toolkits: Toolkits,
+    ledger: Ledger,
+    may_fix: bool,
+    proposed: tuple[str, ...],
+    close: bool,
+) -> Performed:
+    """Everything that needs a model, in one event loop, including the shutdown.
+
+    A backend holding a subprocess cannot be closed from a second loop: the process was awaited in
+    the first one. That is why reading a comment, answering it, analysing, deciding and fixing all
+    happen inside this one call rather than in several `asyncio.run` invocations.
+    """
+    performed = Performed()
+    try:
+        if woken is not None:
+            plan = await _episode(
+                performed,
+                plan,
+                woken=woken,
+                manifest=manifest,
+                roster=roster,
+                library=library,
+                overlay=overlay,
+                run_directory=run_directory,
+                budget=budget,
+                toolkits=toolkits,
+                ledger=ledger,
+            )
+            if performed.halted or performed.answered is not None:
+                return performed
+        await _perform(
+            performed,
+            plan,
+            manifest=manifest,
+            roster=roster,
+            library=library,
+            overlay=overlay,
+            session=session,
+            rules=rules,
+            repository=repository,
+            run_directory=run_directory,
+            budget=budget,
+            toolkits=toolkits,
+            ledger=ledger,
+            may_fix=may_fix,
+            proposed=proposed,
+        )
+        return performed
+    finally:
+        if close:
+            await roster.close()
+
+
+async def _episode(
+    performed: Performed,
+    plan: Plan,
+    *,
+    woken: Woken,
+    manifest: Manifest,
+    roster: Roster,
+    library: Library,
+    overlay: Overlay,
+    run_directory: Path,
+    budget: Budget,
+    toolkits: Toolkits,
+    ledger: Ledger,
+) -> Plan:
+    """Read the comment, then do the one thing the table says it asks for.
+
+    Three outcomes, and each of them is cheaper than a full run — which is the point. Somebody who
+    comments on one issue is asking about one thing, and a weekly sweep in reply would make a
+    question the most expensive way to ask one.
+    """
+    performed.read = await classify(
+        woken,
+        roster=roster,
+        tasks_dir=run_directory / "tasks",
+        budget=budget,
+        toolkits=toolkits,
+        ledger=ledger,
+    )
+    match performed.read.course:
+        case Course.IGNORE:
+            performed.halted = (
+                "nothing was written: this comment asks for nothing the agent does"
+                + (
+                    f" ({performed.read.classification.gist})"
+                    if performed.read.classification
+                    else ""
+                )
+            )
+        case Course.ANSWER:
+            performed.answered = await answer(
+                woken,
+                roster=roster,
+                library=library,
+                playbook=plan.playbook,
+                notes=overlay.notes,
+                tasks_dir=run_directory / "tasks",
+                budget=budget,
+                toolkits=toolkits,
+                ledger=ledger,
+            )
+        case Course.RECHECK:
+            narrowed, why = narrow(plan, woken.key)
+            if why:
+                performed.halted = f"nothing was re-established: {why}"
+            else:
+                # The record shows the tasks that ran, with the rest listed as skipped and why. A
+                # manifest carrying the full plan would claim a weekly sweep this run never did.
+                manifest.replan(narrowed)
+                return narrowed
+    return plan
+
+
 async def _perform(
+    performed: Performed,
     plan: Plan,
     *,
     manifest: Manifest,
@@ -446,57 +630,117 @@ async def _perform(
     ledger: Ledger,
     may_fix: bool,
     proposed: tuple[str, ...],
-    close: bool,
-) -> tuple[list[Executed], Verdict, list[Fix], Queue | None]:
-    """Analyse, decide, and then — on a maintenance run — fix what the decision allows.
+) -> None:
+    """Analyse, decide, and then — on a maintenance run — fix what the decision allows."""
+    performed.executed = await execute(
+        plan,
+        roster=roster,
+        library=library,
+        notes=overlay.notes,
+        evidence=session.evidence,
+        tasks_dir=run_directory / "tasks",
+        budget=budget,
+        toolkits=toolkits,
+        ledger=ledger,
+    )
+    performed.verdict = _conclude(manifest, performed.executed, rules=rules, session=session)
+    if not may_fix:
+        return
+    performed.queue = plan_fixes(
+        performed.verdict.judged,
+        library=library,
+        overlay=overlay,
+        playbook=plan.playbook,
+        repository=repository,
+        max_open_fix_requests=overlay.queue.max_open_fix_requests,
+        proposed=proposed,
+    )
+    performed.fixes = await apply(
+        performed.queue,
+        repository=repository,
+        roster=roster,
+        library=library,
+        notes=overlay.notes,
+        surfaces=overlay.verification,
+        trees_dir=run_directory / "fixes",
+        tasks_dir=run_directory / "tasks",
+        budget=budget,
+        toolkits=toolkits,
+        ledger=ledger,
+        run=manifest.run_id,
+    )
+    _account(manifest, performed.fixes)
 
-    All of it in one event loop, including the shutdown. A backend holding a subprocess cannot be
-    closed from a second loop: the process was awaited in the first one. That constraint is why the
-    deterministic decision in the middle happens here rather than between two `asyncio.run` calls.
+
+def _wrote_back(
+    request: Request,
+    *,
+    manifest: Manifest,
+    performed: Performed,
+    woken: Woken | None,
+    platform: Platform | None,
+    cache: FactCache,
+    session: Session,
+) -> RunRecord:
+    """Finish a run that answered a person instead of judging anything, and post the answer.
+
+    Kept apart from the verdict path rather than folded into it. This run analysed nothing and
+    changed nothing, so it has no stance to publish and no threads to reconcile; the one thing it
+    produces is a comment, and treating it as a review would put a pass or a refusal on a change
+    request over somebody's question.
     """
-    try:
-        executed = await execute(
-            plan,
-            roster=roster,
-            library=library,
-            notes=overlay.notes,
-            evidence=session.evidence,
-            tasks_dir=run_directory / "tasks",
-            budget=budget,
-            toolkits=toolkits,
-            ledger=ledger,
+    written = performed.answered
+    if written is not None and woken is not None:
+        if request.publish and platform is not None:
+            deliver(platform, woken, written, run=manifest.run_id)
+            if written.failure:
+                manifest.warnings.append(f"the answer was not posted: {written.failure}")
+        else:
+            manifest.warnings.append(
+                "the answer was written but not posted: this run was not asked to publish. It is "
+                "in the run's record and in the report"
+            )
+        manifest.actions = {"answer": written.as_json()}
+    if performed.halted:
+        manifest.warnings.append(performed.halted)
+    manifest.cache = cache.stats.as_json() | {"writable": cache.writable}
+    manifest.finish(ANSWERED if written is not None else DECLINED)
+    manifest_path = manifest.write(request.run_dir)
+    session.evidence.write(manifest_path.parent / "evidence.jsonl")
+    report = _wake_report(manifest, performed=performed, woken=woken)
+    (manifest_path.parent / REPORT).write_text(report, encoding="utf-8")
+    return RunRecord(manifest, manifest_path, ExitCode.OK, None, report)
+
+
+def _wake_report(manifest: Manifest, *, performed: Performed, woken: Woken | None) -> str:
+    """The report for a wake: what was asked, how it was read, and what was said back."""
+    read = performed.read
+    lines = [
+        f"# {manifest.playbook} — woken by a comment",
+        "",
+        f"- Run `{manifest.run_id}`, agent {manifest.agent_version}",
+    ]
+    if woken is not None:
+        lines += [
+            f"- {woken.said.author} commented on {woken.wake.where}",
+            f"- About finding `{woken.key}`",
+        ]
+    if read is not None:
+        detail = f" ({read.detail})" if read.detail else ""
+        how = (
+            f"{read.classification.intent.value}, "
+            + ("confident" if read.classification.confident else "unsure")
+            if read.classification
+            else "not classified"
         )
-        verdict = _conclude(manifest, executed, rules=rules, session=session)
-        if not may_fix:
-            return executed, verdict, [], None
-        queue = plan_fixes(
-            verdict.judged,
-            library=library,
-            overlay=overlay,
-            playbook=plan.playbook,
-            repository=repository,
-            max_open_fix_requests=overlay.queue.max_open_fix_requests,
-            proposed=proposed,
-        )
-        fixes = await apply(
-            queue,
-            repository=repository,
-            roster=roster,
-            library=library,
-            notes=overlay.notes,
-            surfaces=overlay.verification,
-            trees_dir=run_directory / "fixes",
-            tasks_dir=run_directory / "tasks",
-            budget=budget,
-            toolkits=toolkits,
-            ledger=ledger,
-            run=manifest.run_id,
-        )
-        _account(manifest, fixes)
-        return executed, verdict, fixes, queue
-    finally:
-        if close:
-            await roster.close()
+        lines.append(f"- Read as: {how} → course `{read.course.value}`{detail}")
+        if read.classification:
+            lines.append(f"- What was asked: {read.classification.gist}")
+    if performed.halted:
+        lines += ["", performed.halted]
+    if performed.answered is not None:
+        lines += ["", "## What was said", "", performed.answered.reply or "(nothing)"]
+    return "\n".join(lines) + "\n"
 
 
 def _resolve(
@@ -506,8 +750,12 @@ def _resolve(
 
     A missing client, an unreadable remote or an absent credential costs a warning rather than the
     run: by the time any of it matters the analysis is the expensive part, and it is already done.
+
+    A wake needs the platform to read rather than to write, so it resolves one even without
+    `--publish`: the comment that started the run, and whether its author may write here, are both
+    facts only the platform has.
     """
-    if not request.publish or platform is not None:
+    if platform is not None or not (request.publish or request.trigger.is_woken):
         return platform, ""
     try:
         return GitHub.of(repository), ""
@@ -515,38 +763,14 @@ def _resolve(
         return None, str(error)
 
 
-def _woke_itself(request: Request, *, platform: Platform | None) -> str:
-    """Why this wake must be ignored, or an empty string when it is somebody's genuine request.
-
-    Two rules. The first is the library's: a bot's comment does not wake the agent. The second is
-    the loop this project has already seen the start of — a run publishing under a human account, in
-    a workflow that wakes on human comments, wakes itself. The account is compared rather than the
-    wording, because "was this comment mine?" has exactly one honest answer.
-
-    Only a wake is checked. A schedule and a manual run have no author to suspect, and a change
-    somebody pushed is a change worth reviewing whoever pushed it.
-    """
-    if not request.actor or not request.trigger.is_woken:
-        return ""
-    if request.actor.endswith(BOT_SUFFIX):
-        return (
-            f"declined: {request.actor} is a bot, and a machine's comment does not wake the agent. "
-            "A run per comment between two machines is a bill with no reader"
-        )
+def _speaks_as(platform: Platform | None) -> Identity | None:
+    """Whose account the credential is, when it can be asked. `None` is not an answer to act on."""
     if platform is None:
-        # Without a credential there is no account to compare against, and the suffix rule above is
-        # all that can be checked. Said out loud rather than assumed safe.
-        return ""
+        return None
     try:
-        mine = platform.identity()
+        return platform.identity()
     except ScmError:
-        return ""
-    if mine.login and mine.login == request.actor:
-        return (
-            f"declined: this run was woken by {request.actor}, which is the account the agent "
-            "publishes as. Answering its own comment is a loop, and each turn of it costs a model"
-        )
-    return ""
+        return None
 
 
 def _recall(
@@ -584,6 +808,8 @@ def _announce(
     escalations: tuple[Escalation, ...] = (),
     memory: Memory | None = None,
     document: dict[str, Any] | None = None,
+    woken: Woken | None = None,
+    asked: str = "",
 ) -> None:
     """Write the decision where the trigger's audience is, and record who wrote it.
 
@@ -629,6 +855,7 @@ def _announce(
                     f"which checks keep failing was not remembered ({failed}), so a repeat next "
                     "week reads as a first failure and is reported to nobody"
                 )
+        proposals: dict[str, tuple[str, str]] = {}
         if any(fix.outcome is FixOutcome.FIXED for fix in fixes):
             opened = propose_fixes(
                 platform,
@@ -639,9 +866,29 @@ def _announce(
                 run=manifest.run_id,
             )
             actions["changes"] = opened.as_json()
+            proposals = {item.key: (item.what, item.detail) for item in opened.posted}
             for item in opened.posted:
                 if item.what != "proposed":
                     manifest.warnings.append(f"a verified fix was not proposed: {item.detail}")
+        if woken is not None and woken.issue is not None:
+            failed = _report_back(
+                platform,
+                woken=woken,
+                issue=woken.issue,
+                asked=asked,
+                verdict=verdict,
+                outcomes=outcomes,
+                fixes=fixes,
+                proposals=proposals,
+                tracked=tracked,
+                run=manifest.run_id,
+            )
+            actions["status"] = {"posted": not failed, "failure": failed}
+            if failed:
+                manifest.warnings.append(
+                    f"the person who woke this run was not told what happened ({failed}); the "
+                    "issue they commented on shows no answer"
+                )
     else:
         assert request.change is not None  # noqa: S101 - guaranteed by the check in `run`
         published = publish_review(
@@ -669,6 +916,58 @@ def _announce(
     manifest.actions = actions
     if caution:
         manifest.warnings.append(caution)
+
+
+def _report_back(
+    platform: Platform,
+    *,
+    woken: Woken,
+    issue: Issue,
+    asked: str,
+    verdict: Verdict,
+    outcomes: tuple[TaskOutcome, ...],
+    fixes: tuple[Fix, ...],
+    proposals: dict[str, tuple[str, str]],
+    tracked: Tracking,
+    run: str,
+) -> str:
+    """Tell the person on the issue they commented on what came of it, or say why that failed.
+
+    Only on an issue. A comment on a change request is answered by the review this run publishes
+    there — a second comment saying the same thing would be the agent talking twice.
+
+    Every sentence comes from a recorded fact: whether the owning check finished, whether it still
+    reports the finding, what the fix session did, and what the platform said about the branch.
+    Nothing here is generated.
+    """
+    key = woken.key
+    fix = next((item for item in fixes if key in item.job.keys), None)
+    what, detail = proposals.get(key, ("", ""))
+    aftermath = Aftermath(
+        still_found=any(item.finding.key == key for item in verdict.judged),
+        proven=unproven(key, outcomes) is None,
+        fixed=fix is not None and fix.outcome is FixOutcome.FIXED,
+        fix_detail=fix.detail if fix is not None else "",
+        proposal=detail if what == "proposed" else "",
+        problem=detail if what and what != "proposed" else "",
+    )
+    if fix is None and not aftermath.problem:
+        aftermath = replace(
+            aftermath,
+            problem=next(
+                (
+                    item.detail
+                    for item in tracked.posted
+                    if item.key == key and item.what == "deferred"
+                ),
+                "",
+            ),
+        )
+    try:
+        platform.note(issue, status_for(woken, aftermath, asked=asked, run=run))
+    except ScmError as error:
+        return str(error)
+    return ""
 
 
 def _conclude(
@@ -717,6 +1016,25 @@ def _account(manifest: Manifest, fixes: list[Fix]) -> None:
                 {"task": fix.job.task.id, "attempt": attempt.number} | attempt.session.as_json()
             )
     manifest.cost = _cost(manifest.models)
+
+
+def _spent(manifest: Manifest, performed: Performed) -> None:
+    """Put a wake's own sessions on the same books as everything else the run paid for.
+
+    The classifier runs before the plan is even narrowed, so a run that went on to re-establish a
+    fact would otherwise report the analysis it did and not the reading that chose it — and the
+    ledger, which admitted both, would disagree with the manifest about what the run cost.
+    """
+    for task, attempts in (
+        ("wake-intent", performed.read.attempts if performed.read else []),
+        ("wake-answer", performed.answered.attempts if performed.answered else []),
+    ):
+        manifest.models += [
+            {"task": task, "attempt": attempt.number} | attempt.session.as_json()
+            for attempt in attempts
+        ]
+    if performed.read is not None or performed.answered is not None:
+        manifest.cost = _cost(manifest.models)
 
 
 def _cost(models: list[dict[str, object]]) -> dict[str, object]:

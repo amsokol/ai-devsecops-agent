@@ -97,6 +97,7 @@ class Toolkit:
         quarantine_days: int,
         step_limit: int | None = None,
         worktree: Path | None = None,
+        tools: bool = True,
     ) -> None:
         self.task = task
         self.now = now
@@ -104,6 +105,13 @@ class Toolkit:
         self.step_limit = step_limit
         self.worktree = worktree
         """The isolated tree a fix task edits. Absent for analysis, which changes nothing."""
+        self.offered = tools
+        """Whether this session gets any tools at all.
+
+        False for classifying a comment: that answer has to depend on the text it was handed and
+        nothing else, and a session able to read the repository would eventually classify from what
+        it found there instead of from what was said.
+        """
         self._session = session
         self._tools: TaskTools = session.for_task(task.id, root=worktree)
         self._calls: list[Call] = []
@@ -116,6 +124,8 @@ class Toolkit:
         return [call.as_json() for call in self._calls]
 
     def tools(self) -> tuple[Tool, ...]:
+        if not self.offered:
+            return ()
         return self._always() + self._when_reviewing_a_change() + self._when_fixing()
 
     def _when_fixing(self) -> tuple[Tool, ...]:
@@ -832,6 +842,7 @@ class Toolkits:
         *,
         step_limit: int | None = None,
         worktree: Path | None = None,
+        tools: bool = True,
     ) -> Toolkit:
         return Toolkit(
             session=self.session,
@@ -840,4 +851,5 @@ class Toolkits:
             quarantine_days=self.quarantine_days,
             step_limit=step_limit,
             worktree=worktree,
+            tools=tools,
         )

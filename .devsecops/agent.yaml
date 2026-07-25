@@ -15,7 +15,13 @@ review:
     # `provider/model`: the provider on the left decides which models exist, so the name on the right
     # is an address only together with it. Moving to another provider is one word on one line.
     # Credentials come from the environment, never from this file — it is in git.
-    analyst: cursor/composer-2.5
+    analyst: cursor/composer-2.5   # reviews the change and reports what is wrong with it
+
+    # The two roles a comment wakes. Somebody replied in one of the agent's threads: `intent` reads
+    # what they want — one short session, no tools, so the cheapest model that reads English is the
+    # right one here — and `writer` answers them in prose. Neither ever changes a file.
+    intent: cursor/composer-2.5
+    writer: cursor/composer-2.5
 
   # Reaching any limit below has one and the same effect: the work is reported as unfinished and the
   # merge is refused — never as "nothing found". Each line says what moving the number does.
@@ -39,6 +45,8 @@ maintenance:
   models:
     analyst: cursor/composer-2.5   # finds what has gone stale or become vulnerable
     fixer: cursor/composer-2.5     # writes the fix and runs the verification below
+    intent: cursor/composer-2.5    # reads what a comment on one of the agent's issues asks for
+    writer: cursor/composer-2.5    # answers it, when answering is all it asks for
 
   # Usually below the review's numbers: this run spends while nobody is watching it, and a mistake
   # here should not arrive as an invoice a month later.

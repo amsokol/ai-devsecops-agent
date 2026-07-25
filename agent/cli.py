@@ -15,11 +15,12 @@ from typing import Any
 
 from agent import __version__
 from agent.domain import Trigger
-from agent.errors import AgentError, ExitCode
+from agent.errors import AgentError, ConfigError, ExitCode
 from agent.library import Library
 from agent.manifest import read_manifest
 from agent.orchestrator import REPORT, Request, RunRecord, run
 from agent.scm.port import Identity
+from agent.wake import Wake
 
 DEFAULT_OVERLAY = ".devsecops"
 DEFAULT_RUN_DIR = ".agent/runs"
@@ -48,18 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
             "of fixed findings resolved. Needs --change and a credential the client can read"
         ),
     )
+    _add_wake(review)
 
     maintain = subcommands.add_parser("maintain", help="maintain the default branch")
     _add_common(maintain)
     maintain.add_argument("--wake-issue", type=int, help="issue whose comment woke this run")
-    maintain.add_argument(
-        "--actor",
-        default="",
-        help=(
-            "login whose comment woke this run. A bot's comment, or the agent's own account, ends "
-            "the run before it spends anything: an agent that answers itself answers forever"
-        ),
-    )
+    _add_wake(maintain)
     maintain.add_argument(
         "--scheduled",
         action="store_true",
@@ -93,6 +88,31 @@ def build_parser() -> argparse.ArgumentParser:
     pin.add_argument("--library", type=Path, default=Path(DEFAULT_LIBRARY))
 
     return parser
+
+
+def _add_wake(parser: argparse.ArgumentParser) -> None:
+    """How a run says it was woken by a comment: which comment, and whose action it was.
+
+    Both are required together. The comment identifier is what the run reads — a wake with no text
+    to read is a run that guesses what it was asked — and the account is what it checks before
+    spending anything. Either alone is a workflow that is not passing what the event gave it.
+    """
+    parser.add_argument(
+        "--wake-comment",
+        type=int,
+        help=(
+            "identifier of the comment that woke this run. With --wake-issue for a comment on an "
+            "issue, with --change for a reply in a review thread"
+        ),
+    )
+    parser.add_argument(
+        "--actor",
+        default="",
+        help=(
+            "login whose comment woke this run. A bot's comment, the agent's own account, or an "
+            "account with no write access ends the run before it spends anything"
+        ),
+    )
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -161,14 +181,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _request(arguments: argparse.Namespace) -> Request:
-    trigger = (
-        _maintenance_trigger(arguments)
-        if arguments.command == "maintain"
-        else Trigger(arguments.trigger)
-    )
+    woken = _wake(arguments)
     repository = arguments.repo.resolve()
     return Request(
-        trigger=trigger,
+        trigger=_trigger(arguments, woken),
         repository=repository,
         library_path=arguments.library,
         overlay_path=arguments.overlay or repository / DEFAULT_OVERLAY,
@@ -176,8 +192,7 @@ def _request(arguments: argparse.Namespace) -> Request:
         config_dir=arguments.config_dir,
         base=getattr(arguments, "base", None),
         change=getattr(arguments, "change", None),
-        wake_issue=getattr(arguments, "wake_issue", None),
-        actor=getattr(arguments, "actor", "") or "",
+        wake=woken,
         plan_only=arguments.plan_only,
         dry_run=getattr(arguments, "dry_run", False),
         publish=getattr(arguments, "publish", False),
@@ -186,18 +201,54 @@ def _request(arguments: argparse.Namespace) -> Request:
     )
 
 
-def _maintenance_trigger(arguments: argparse.Namespace) -> Trigger:
-    """A schedule, somebody's comment, or somebody asking directly — in that order of precedence.
+def _wake(arguments: argparse.Namespace) -> Wake | None:
+    """What woke this run, when a comment did — refusing anything half-stated.
 
-    A wake is its own trigger rather than a flag on a request because everything downstream reads
-    it: a person is waiting, so it gets the interactive budget, and whose comment it was decides
-    whether the run should happen at all.
+    A missing piece is a workflow that is not passing what its event gave it, and every way of
+    guessing the rest is worse than saying so: without the comment the run does not know what it was
+    asked, and without the account it cannot tell a colleague from its own last comment.
     """
-    if arguments.scheduled:
-        return Trigger.MAINTAIN_SCHEDULED
-    if arguments.wake_issue is not None:
-        return Trigger.HUMAN_COMMENT
-    return Trigger.MAINTAIN_REQUESTED
+    comment = getattr(arguments, "wake_comment", None)
+    issue = getattr(arguments, "wake_issue", None)
+    change = getattr(arguments, "change", None)
+    actor = (getattr(arguments, "actor", "") or "").strip()
+    if comment is None:
+        if issue is not None:
+            raise ConfigError(
+                "--wake-issue names the issue but not the comment; add --wake-comment, because a "
+                "run woken by somebody's words has to read them"
+            )
+        if actor:
+            raise ConfigError(
+                "--actor says who woke this run, but nothing says with which comment; add "
+                "--wake-comment"
+            )
+        return None
+    if issue is None and change is None:
+        raise ConfigError(
+            "--wake-comment needs the conversation it is in: --wake-issue for a comment on an "
+            "issue, --change for a reply in a review thread"
+        )
+    if not actor:
+        raise ConfigError(
+            "--wake-comment needs --actor: the account is checked before anything is spent, and an "
+            "unattributed wake cannot be told from the agent's own comment"
+        )
+    return Wake(actor=actor, comment=comment, issue=issue, change=change if issue is None else None)
+
+
+def _trigger(arguments: argparse.Namespace, woken: Wake | None) -> Trigger:
+    """Which trigger this is: the place a comment was left decides it, before any model runs.
+
+    A schedule outranks a wake, because a scheduled run passes no comment; between the two comment
+    triggers it is the conversation that decides, and the decision is arithmetic rather than
+    judgement. What the comment *says* changes the course later, never the playbook.
+    """
+    if arguments.command == "maintain":
+        if arguments.scheduled:
+            return Trigger.MAINTAIN_SCHEDULED
+        return Trigger.COMMENT_ON_ISSUE if woken is not None else Trigger.MAINTAIN_REQUESTED
+    return Trigger.COMMENT_ON_CHANGE if woken is not None else Trigger(arguments.trigger)
 
 
 def _print_actions(actions: dict[str, Any]) -> None:
@@ -228,10 +279,27 @@ def _print_actions(actions: dict[str, Any]) -> None:
         print(f"changes   {opened['opened']} proposed, as {who}")
 
 
+def _print_wake(wake: dict[str, Any]) -> None:
+    """Who woke the run, and how their comment was read.
+
+    Printed together on purpose: "read as unlock, so it rechecked" is the one line that explains why
+    a run somebody started by typing a sentence did what it did.
+    """
+    if not wake:
+        return
+    intent = wake.get("intent") or "unread"
+    sure = "" if wake.get("confident", True) else ", unsure"
+    print(f"woken by {wake.get('actor')} on {wake.get('where') or 'a comment'}")
+    print(f"  read as {intent}{sure} → {wake.get('course', 'none')}")
+    if wake.get("finding"):
+        print(f"  about {wake['finding']}")
+
+
 def _print_summary(record: RunRecord) -> None:
     manifest = record.manifest
     print(f"run {manifest.run_id}  {manifest.playbook}  trigger {manifest.trigger}")
     print(f"library {manifest.library['version']} ({manifest.library['digest'][:19]}…)")
+    _print_wake(manifest.wake)
     for task in manifest.tasks:
         state = task.outcome.value if task.outcome else "planned"
         reason = f" ({task.reason.value})" if task.reason else ""

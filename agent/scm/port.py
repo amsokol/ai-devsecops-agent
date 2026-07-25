@@ -92,6 +92,46 @@ class Thread:
 
 
 @dataclass(frozen=True, slots=True)
+class Comment:
+    """One comment, as the platform has it.
+
+    `body` is the only untrusted text the agent reads. It is somebody's words, so it is data: it is
+    quoted into a classifier's prompt and never obeyed as an instruction, and what the run then does
+    is chosen from a fixed table in code.
+    """
+
+    id: int
+    author: str
+    bot: bool
+    body: str
+    parent: int = 0
+    """For a comment in a review thread, the first comment of that thread — which is the handle the
+    thread is found by. Zero when this comment *is* the first one, or when it is on an issue."""
+    reference: str = ""
+
+    def as_json(self) -> dict[str, Any]:
+        return {"id": self.id, "author": self.author, "bot": self.bot, "reference": self.reference}
+
+
+@dataclass(frozen=True, slots=True)
+class Authority:
+    """Whether an account may write to this repository, and whether that could be established.
+
+    Asked because a comment is a way to make the agent spend money and grant permission. Without the
+    question, anybody who can comment on an issue decides both. `known` is false when the platform
+    would not answer, and an unknown answer is treated as a refusal: guessing in the permissive
+    direction is the one mistake here that cannot be taken back.
+    """
+
+    login: str
+    writes: bool
+    known: bool = True
+
+    def as_json(self) -> dict[str, Any]:
+        return {"login": self.login, "writes": self.writes, "known": self.known}
+
+
+@dataclass(frozen=True, slots=True)
 class Identity:
     """Who the platform thinks is speaking.
 
@@ -213,7 +253,23 @@ class Platform(Protocol):
     def identity(self) -> Identity:
         """Whose account the credential speaks for."""
 
+    def authority(self, login: str) -> Authority:
+        """Whether this account may write to the repository."""
+
     def change(self, number: int) -> Change: ...
+
+    def change_comment(self, number: int, comment: int) -> Comment:
+        """One comment in a review conversation, with the thread it belongs to."""
+
+    def issue_at(self, number: int) -> Issue | None:
+        """One issue by number, or `None` when it carries no marker.
+
+        `None` means "not the agent's to act on". A run woken by a comment on somebody else's issue
+        has nothing it can do there: no finding key, so nothing to recheck and nothing to unlock.
+        """
+
+    def issue_comment(self, issue: int, comment: int) -> Comment:
+        """One comment on an issue."""
 
     def threads(self, number: int) -> tuple[Thread, ...]:
         """The agent's own threads on this change, whatever their state."""
