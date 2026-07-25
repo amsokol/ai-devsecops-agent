@@ -6,9 +6,12 @@
 # to grant hosts or binaries.
 
 binaries:
-  # Version control and hosting
+  # Version control
+  #
+  # No hosting client. A task's commands are given an environment with no credentials, so a client
+  # that authenticates before it answers can only fail — and the agent's own publishing does not come
+  # through here. Ask the platform's API instead.
   - git
-  - gh
   # Python
   - uv
   - pip
@@ -45,6 +48,11 @@ hosts:
   - sum.golang.org
   - buf.build
   - registry.bazel.build
+  # Container image metadata
+  - hub.docker.com
+  - registry-1.docker.io
+  - auth.docker.io
+  - ghcr.io
 
 # Egress policy: what may leave the run at all. Enforced by the backend port, recorded in the
 # manifest, and deliberately stated before a second SDK exists.

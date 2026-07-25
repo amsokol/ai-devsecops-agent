@@ -176,6 +176,18 @@ class GitHub:
             raise ScmError(f"this checkout has no remote named {remote}: {error}") from None
         return cls.at(url)
 
+    def reading_token(self) -> str:
+        """The token, for the agent's own GET-only tool and for nothing else.
+
+        Anonymous access to this API allows sixty requests an hour, which one ecosystem of one task
+        can exhaust — and did, on the first live run of a repository with six. What follows is worse
+        than slow: the facts a quarantine decision needs go missing, the findings resting on them
+        disappear, and the same repository is reported as blocked or as passing depending on how
+        many requests the hour before happened to make. A gate whose answer depends on a rate limit
+        is not a gate.
+        """
+        return self.credential.token
+
     def identity(self) -> Identity:
         """Whose account this token speaks for, asked rather than assumed.
 

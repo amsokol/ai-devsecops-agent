@@ -283,6 +283,15 @@ class Platform(Protocol):
     def identity(self) -> Identity:
         """Whose account the credential speaks for."""
 
+    def reading_token(self) -> str:
+        """The credential a task's reads of this platform's API may carry, when there is one.
+
+        Only for the agent's own HTTP tool, which is GET-only and confined to allowlisted hosts. Not
+        for commands: those are given an environment with none, because a command may be executing
+        code that arrived in the change under review. Empty when the platform has no credential, and
+        acquisition then falls back to anonymous access and its far lower rate limit.
+        """
+
     def authority(self, login: str) -> Authority:
         """Whether this account may write to the repository."""
 

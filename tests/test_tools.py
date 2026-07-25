@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from agent.errors import ConfigError
@@ -26,6 +28,7 @@ from agent.tools import (
     grant,
     quarantine,
 )
+from agent.tools.network import _GuardedRedirects
 from agent.tools.versions import UNORDERED
 
 PYTHON = "ecosystems/python-uv"
@@ -183,6 +186,98 @@ def test_hosts_are_checked_before_any_request_leaves() -> None:
         client.get("https://evil.example/pypi/httpx/json")
     with pytest.raises(HostNotPermitted, match="not https"):
         client.get("http://pypi.org/pypi/httpx/json")
+
+
+def opened(monkeypatch: pytest.MonkeyPatch) -> list[urllib.request.Request]:
+    """Every request an opener would send, without sending any of them."""
+    sent: list[urllib.request.Request] = []
+
+    class Opener:
+        def open(self, request: urllib.request.Request, timeout: int) -> Any:
+            sent.append(request)
+            return _NoBody(request.full_url)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: Opener())
+    return sent
+
+
+class _NoBody:
+    """Enough of an HTTP response for the reader, since the point under test is the request."""
+
+    status = 200
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    def __enter__(self) -> _NoBody:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def read(self, _size: int) -> bytes:
+        return b"{}"
+
+    def geturl(self) -> str:
+        return self._url
+
+    def getheaders(self) -> list[tuple[str, str]]:
+        return []
+
+
+def test_the_platform_read_token_travels_only_to_the_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent = opened(monkeypatch)
+    given = "s3cret"
+    client = HttpClient(
+        grants=Grants(binaries=frozenset(), hosts=frozenset({"api.github.com", "pypi.org"})),
+        token=given,
+    )
+
+    client.get("https://api.github.com/repos/a/b/tags")
+    client.get("https://pypi.org/pypi/httpx/json")
+
+    assert sent[0].get_header("Authorization") == "Bearer s3cret"
+    assert sent[1].get_header("Authorization") is None
+
+
+def test_without_a_token_nothing_is_attached(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = opened(monkeypatch)
+    client = HttpClient(grants=Grants(binaries=frozenset(), hosts=frozenset({"api.github.com"})))
+
+    client.get("https://api.github.com/repos/a/b/tags")
+
+    assert sent[0].get_header("Authorization") is None
+
+
+def test_a_redirect_to_another_host_drops_the_credential() -> None:
+    """Allowlisted is not the same as entitled: the token was granted to one of these hosts."""
+    grants = Grants(binaries=frozenset(), hosts=frozenset({"api.github.com", "pypi.org"}))
+    request = urllib.request.Request(
+        "https://api.github.com/repos/a/b", headers={"Authorization": "Bearer s3cret"}
+    )
+
+    following = _GuardedRedirects(grants).redirect_request(
+        request, None, 301, "moved", {}, "https://pypi.org/elsewhere"
+    )
+
+    assert following is not None
+    assert following.get_header("Authorization") is None
+
+
+def test_a_redirect_within_the_same_host_keeps_it() -> None:
+    grants = Grants(binaries=frozenset(), hosts=frozenset({"api.github.com"}))
+    request = urllib.request.Request(
+        "https://api.github.com/repos/a/b", headers={"Authorization": "Bearer s3cret"}
+    )
+
+    following = _GuardedRedirects(grants).redirect_request(
+        request, None, 301, "moved", {}, "https://api.github.com/repositories/1"
+    )
+
+    assert following is not None
+    assert following.get_header("Authorization") == "Bearer s3cret"
 
 
 def test_requirements_are_read_from_the_ecosystem_document(library: Library) -> None:

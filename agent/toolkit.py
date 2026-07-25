@@ -281,7 +281,7 @@ class Toolkit:
             Tool(
                 name="fetch",
                 description=(
-                    "GET an allowlisted https URL with no credentials. A response that parses as "
+                    "GET an allowlisted https URL. A response that parses as "
                     "JSON counts as an API answer and is reproducible; anything else is a page and "
                     "is heuristic. Large documents are not handed over whole: name the part you "
                     "need with 'select', '*' for one field of every member, and 'keys_only' when "
