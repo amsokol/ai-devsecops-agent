@@ -90,13 +90,23 @@ def _encode(raw: bytes) -> str:
 
 
 def _api(claim: str, path: str, *, method: str = "GET") -> dict[str, object]:
-    """Asked through `gh`, with the assertion in place of a token.
+    """Asked through `gh`, with the assertion sent the one way these endpoints accept it.
 
-    The client sends whatever `GH_TOKEN` holds as a bearer credential, which is exactly what these
-    two endpoints want — so the App's own endpoints need no second HTTP client.
+    The header is stated rather than left to the client, which sends a credential from `GH_TOKEN` as
+    `Authorization: token …`. GitHub accepts that scheme for personal tokens and rejects it for an
+    App's assertion, with "a JSON web token could not be decoded" — a message that reads like a
+    signing bug and is nothing of the kind.
     """
     finished = subprocess.run(  # noqa: S603 - fixed binary, no shell, arguments are ours
-        ["gh", "api", path, "--method", method],  # noqa: S607 - resolved in main
+        [  # noqa: S607 - resolved in main
+            "gh",
+            "api",
+            path,
+            "--method",
+            method,
+            "--header",
+            f"Authorization: Bearer {claim}",
+        ],
         capture_output=True,
         text=True,
         check=False,
