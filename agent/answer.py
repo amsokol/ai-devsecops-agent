@@ -57,6 +57,8 @@ class Answered:
     """Which session paid for this, as the cost record names it."""
     facts: tuple[str, ...] = ()
     """What the agent states under the reply, in its own words. Never a model's."""
+    restraint: str = ""
+    """What this run was not allowed to do, when that is why the reply is only prose."""
     prepared: dict[str, Any] = field(default_factory=dict)
     """What was prepared, when anything was: the verification, the files, the form of the offer."""
     attempts: list[Attempt] = field(default_factory=list)
@@ -72,6 +74,7 @@ class Answered:
             "reference": self.reference,
             "failure": self.failure,
             "task": self.task,
+            "restraint": self.restraint,
             "reply": self.reply,
             "prepared": self.prepared,
             "attempts": [attempt.as_json() for attempt in self.attempts],
@@ -90,6 +93,7 @@ async def answer(
     budget: Budget,
     toolkits: Toolkits,
     ledger: Ledger,
+    restraint: str = "",
 ) -> Answered:
     """Write one reply to one person, with the repository readable and nothing writable.
 
@@ -135,7 +139,7 @@ async def answer(
     )
     for attempt in attempted.attempts:
         await ledger.record(attempt.session.usage)
-    written = Answered(attempts=attempted.attempts, calls=toolkit.as_json())
+    written = Answered(attempts=attempted.attempts, calls=toolkit.as_json(), restraint=restraint)
     result: AnswerResult | None = attempted.parsed
     if result is None:
         ran_out = attempted.failure in {Failure.TIMED_OUT, Failure.EXHAUSTED}
@@ -267,6 +271,8 @@ def _body(woken: Woken, written: Answered, *, run: str) -> str:
         f"Written by `ai-devsecops-agent` in run `{run}` about finding `{woken.key}`, from what "
         "that run could establish. Nothing in the repository was changed.",
     )
+    if written.restraint:
+        stated = (written.restraint, "", *stated)
     lines += ["", "---", "", *stated]
     return marker.stamp("\n".join(lines), woken.key)
 

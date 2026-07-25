@@ -98,6 +98,7 @@ class Toolkit:
         step_limit: int | None = None,
         worktree: Path | None = None,
         tools: bool = True,
+        executes: bool = True,
     ) -> None:
         self.task = task
         self.now = now
@@ -105,6 +106,13 @@ class Toolkit:
         self.step_limit = step_limit
         self.worktree = worktree
         """The isolated tree a fix task edits. Absent for analysis, which changes nothing."""
+        self.executes = executes
+        """Whether a command may be run over this checkout.
+
+        False when the code came from outside the repository. Enforced by not offering the tool at
+        all rather than by asking the session not to use it: a prompt is a request, and this is the
+        one property of a review job that a long session must not be able to drift away from.
+        """
         self.offered = tools
         """Whether this session gets any tools at all.
 
@@ -126,7 +134,61 @@ class Toolkit:
     def tools(self) -> tuple[Tool, ...]:
         if not self.offered:
             return ()
-        return self._always() + self._when_reviewing_a_change() + self._when_fixing()
+        return (
+            self._always()
+            + self._when_executing()
+            + self._when_reviewing_a_change()
+            + self._when_fixing()
+        )
+
+    @property
+    def caveats(self) -> tuple[str, ...]:
+        """What this task cannot do, in the words its prompt needs.
+
+        Said out loud as well as enforced. A session that finds no way to run a scanner would
+        otherwise reason about why, and the honest answer — record the gap, do not approximate it
+        from reading — is cheaper to give than to have discovered.
+        """
+        if self.executes:
+            return ()
+        return (
+            "- No command may be run in this task, and there is no tool for it. This change comes "
+            "from outside the repository, and its code is read here, never executed. Where a check "
+            "needs a command, `record_gap` with reason `not-permitted` and report what reading "
+            "established — do not approximate the command's answer.",
+        )
+
+    def _when_executing(self) -> tuple[Tool, ...]:
+        """Offered only when the code in this checkout is the repository's own."""
+        if not self.executes:
+            return ()
+        return (
+            Tool(
+                name="run_command",
+                description=(
+                    "Run one allowlisted binary with arguments. There is no shell: no pipes, no "
+                    "redirection, no chaining. Binaries come from the ecosystem's requirements."
+                ),
+                schema=_schema(
+                    {
+                        "command": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "binary first, then its arguments",
+                        },
+                        "in_scratch": {
+                            "type": "boolean",
+                            "description": (
+                                "run in a scratch directory instead of the repository, for probes "
+                                "that write files"
+                            ),
+                        },
+                    },
+                    required=["command"],
+                ),
+                run=self._run_command,
+            ),
+        )
 
     def _when_fixing(self) -> tuple[Tool, ...]:
         """Offered only to a task that was given a worktree.
@@ -215,31 +277,6 @@ class Toolkit:
                     required=["pattern"],
                 ),
                 run=self._search_text,
-            ),
-            Tool(
-                name="run_command",
-                description=(
-                    "Run one allowlisted binary with arguments. There is no shell: no pipes, no "
-                    "redirection, no chaining. Binaries come from the ecosystem's requirements."
-                ),
-                schema=_schema(
-                    {
-                        "command": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "binary first, then its arguments",
-                        },
-                        "in_scratch": {
-                            "type": "boolean",
-                            "description": (
-                                "run in a scratch directory instead of the repository, for probes "
-                                "that write files"
-                            ),
-                        },
-                    },
-                    required=["command"],
-                ),
-                run=self._run_command,
             ),
             Tool(
                 name="fetch",
@@ -375,6 +412,15 @@ class Toolkit:
         for tool in self.tools():
             if tool.name == name:
                 return tool.run(arguments)
+        if name == "run_command" and not self.executes:
+            # Answered by name rather than with "no such tool", because the two lead somewhere
+            # different: one is a typo to correct, the other is a fact about this run that the
+            # session has to record instead of working around.
+            raise Refused(
+                "nothing is executed in this run: the code under review comes from outside the "
+                "repository. There is no command tool here and no other route to one. Where the "
+                "check needed one, record_gap with reason `not-permitted`."
+            )
         raise Refused(f"there is no tool named {name!r}")
 
     # Acquisition -----------------------------------------------------------------
@@ -835,6 +881,9 @@ class Toolkits:
     session: Session
     now: datetime
     quarantine_days: int
+    executes: bool = True
+    """Whether this run may run commands at all. A property of the run, not of a task: what makes it
+    unsafe is where the code came from, which is the same for every task in the run."""
 
     def for_task(
         self,
@@ -852,4 +901,5 @@ class Toolkits:
             step_limit=step_limit,
             worktree=worktree,
             tools=tools,
+            executes=self.executes,
         )

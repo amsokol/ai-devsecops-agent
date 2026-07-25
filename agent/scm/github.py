@@ -224,11 +224,17 @@ class GitHub:
         got = self._api(f"repos/{self.slug}/pulls/{number}")
         head = got.get("head") or {}
         user = got.get("user") or {}
+        where = str(((head.get("repo") or {}).get("full_name")) or "")
         return Change(
             number=number,
             head=str(head.get("sha", "")),
             author=str(user.get("login", "")),
             draft=bool(got.get("draft", False)),
+            repository=where,
+            # An unnamed head repository is a fork that has since been deleted, and it reads as a
+            # fork here. The alternative is to treat "the platform did not say" as "it is ours",
+            # which is the one mistake in this comparison that cannot be taken back.
+            elsewhere=where.casefold() != self.slug.casefold(),
         )
 
     def threads(self, number: int) -> tuple[Thread, ...]:

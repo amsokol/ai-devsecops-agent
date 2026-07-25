@@ -62,6 +62,16 @@ class Change:
     code, and comments derived from it would point at lines nobody proposed."""
     author: str
     draft: bool = False
+    repository: str = ""
+    """Which repository the head branch lives in, as the platform names it. Empty when it would not
+    say, which is what a deleted fork looks like."""
+    elsewhere: bool = False
+    """True when that is not this repository — a fork.
+
+    The one fact that decides whether this run may execute anything it reads. A command run over a
+    fork's head runs a stranger's code next to this run's credentials, and there is no environment
+    hygiene that prevents a child process from reading them out of `/proc` under the same user.
+    """
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -69,6 +79,8 @@ class Change:
             "head": self.head,
             "author": self.author,
             "draft": self.draft,
+            "repository": self.repository,
+            "elsewhere": self.elsewhere,
         }
 
 

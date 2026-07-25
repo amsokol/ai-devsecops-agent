@@ -84,6 +84,7 @@ def on_change(
     number: int = 4,
     path: str = "",
     line: int = 0,
+    fork: str = "",
 ) -> FakePlatform:
     """A platform holding one of the agent's review threads, with a reply in it.
 
@@ -103,6 +104,7 @@ def on_change(
         opened=[thread],
         said={COMMENT: said(body, parent=1)},
         writers=(PERSON,),
+        fork=fork,
     )
 
 
@@ -656,6 +658,38 @@ def test_a_question_about_fixing_is_answered_with_the_change_itself(
     assert len(only(record, "wake-intent")) == 1
     assert len(only(record, "wake-patch")) == 1
     assert record.manifest.cost["sessions"] == 2
+
+
+def test_the_same_question_on_a_fork_is_answered_in_prose_and_says_why(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """A change from outside the repository is read and never executed, so there is nothing to
+    verify a patch against — and a session that prepared one would have to run in the same place the
+    credentials are. The person still gets an answer, and it says why it is only an answer.
+
+    The fixer is bound here exactly as in the test above. What differs is one fact from the
+    platform, which is the point: nothing about the product's configuration changes.
+    """
+    settled(git_repo)
+    platform = on_change(
+        "how do I fix this?", path="pyproject.toml", line=PIN, fork="stranger/product"
+    )
+    record = run(
+        woken_on_change(git_repo, library_root, fixing(overlay_root), config_dir, tmp_path),
+        platform=platform,
+        backend=scripted("fix"),
+    )
+
+    assert record.exit_code == int(ExitCode.OK)
+    assert record.manifest.wake["intent"] == "fix"
+    assert record.manifest.wake["course"] == Course.ANSWER.value
+    assert record.manifest.posture["executes"] is False
+    note = platform.replies[0][1]
+    assert "Bump it to 3.1.4." in note
+    assert "```suggestion" not in note and "```diff" not in note
+    assert "comes from outside the repository" in note
+    assert not record.manifest.actions["answer"]["prepared"]
+    assert branches(git_repo) == {"main"}
 
 
 def test_a_patch_nobody_could_verify_is_still_offered_and_says_so(

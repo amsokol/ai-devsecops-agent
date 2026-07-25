@@ -29,7 +29,7 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.4.1` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.4.2` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.
@@ -40,7 +40,9 @@ keeps the sandbox on.
 
 `--plan-only` builds and prints the plan without executing tasks, which is the way to see what a
 trigger would do. Add `--json` to print the run manifest instead of a summary, and `--no-cache` to
-prove a verdict reproduces without the cache of immutable facts.
+prove a verdict reproduces without the cache of immutable facts. `--outside` reviews a change as if
+its head came from a fork, which is how the restrained mode below is exercised deliberately; it can
+only take permission away.
 
 | Path | Meaning |
 | --- | --- |
@@ -64,6 +66,38 @@ records which commit the overlay came from. Two cases fall back to the checkout 
 an overlay kept outside the repository is not part of any change, and a base with no overlay is a
 change introducing one, where there is no earlier version to prefer. A maintenance run reads the
 checkout, because there it *is* the default branch.
+
+## A change from outside the repository
+
+Before any session starts, a run establishes one fact: whether the head under review lives in this
+repository. A branch here is the repository's own work and is reviewed as always. A head in a fork is
+**read, and nothing in it is executed** — no scanner, no install, no verification from the overlay.
+
+The reason is what the job holds rather than what the code might do. An installation token and a model
+provider's key sit next to the process, and one command over a fork's manifest runs a stranger's build
+script under the same user as the process holding both. Handing that command a scrubbed environment
+changes nothing: a child can read the parent's original one out of `/proc`, along with the checkout and
+whatever else that user can read. The containments that work are a different security context — a
+container with no network, a separate user — or not executing, which costs nothing.
+
+What the run does instead, and what it gives up:
+
+| | Own branch | Fork |
+| --- | --- | --- |
+| reading the diff, files, registries | yes | yes |
+| `run_command` in a session | offered | not in the toolkit; asking for it is refused with what to do instead |
+| a check that needs a command | runs | recorded as a gap, reason `not-permitted` |
+| a fix branch, a prepared patch | as configured | never |
+| "how do I fix this?" | the change, verified | a paragraph, and a line saying why there is no patch |
+
+A head the platform will not place is treated as a fork: not asked, an API error, or a fork since
+deleted all read the same way. A review that guesses in the permissive direction is one an attacker
+arranges by breaking a single call. The posture, its reason and the consequence are in the manifest and
+in the report's first lines, so a thin review of a fork is never mistaken for a clean one.
+
+This closes the fork case and not the general one. Malicious code already merged into the default
+branch is executed by a maintenance run as the repository's own — the barrier there is the review that
+happens before the merge, not the execution mode afterwards.
 
 ## Storage
 

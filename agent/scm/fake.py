@@ -50,6 +50,9 @@ class FakePlatform:
     """Report an integration without naming it, as an App's installation token does: it proves what
     the caller is and not which App, and the name only appears on what gets published."""
     draft: bool = False
+    fork: str = ""
+    """When set, the head lives in that repository rather than this one, which is how a change from
+    an outside contributor is tested: the run may read it and may execute nothing from it."""
     refuse_own_review: bool = False
     """Behave like GitHub does on a change the credentials themselves opened: no review event at
     all, approving or otherwise, so the decision arrives as a plain comment."""
@@ -95,7 +98,14 @@ class FakePlatform:
 
     def change(self, number: int) -> Change:
         self._check()
-        return Change(number=number, head=self.head, author=self.author, draft=self.draft)
+        return Change(
+            number=number,
+            head=self.head,
+            author=self.author,
+            draft=self.draft,
+            repository=self.fork or "product/repo",
+            elsewhere=bool(self.fork),
+        )
 
     def change_comment(self, number: int, comment: int) -> Comment:
         self._check()

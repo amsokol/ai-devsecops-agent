@@ -33,6 +33,7 @@ from agent.overlay import MAINTENANCE, REVIEW, VALUES_FILE, Overlay, digest_on_d
 from agent.patch import prepare
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
+from agent.posture import posture_for
 from agent.propose import propose_fixes
 from agent.publish import publish_review
 from agent.reconcile import caution_for, unproven
@@ -70,6 +71,10 @@ class Request:
     """Somebody's comment, when one started this run: whose it was, and which conversation. Checked
     against the platform before anything is spent — an agent that answers its own comment answers it
     forever, and an account with no write access is not who a budget answers to."""
+    outside: bool = False
+    """Treat the head as code from outside this repository, whatever the platform says. Can only
+    restrain the run, which is why it needs no counterpart: there is no flag for asserting that
+    somebody else's code is safe to execute."""
     plan_only: bool = False
     dry_run: bool = False
     """Analyse and say what would be fixed, without creating a worktree, a branch or a commit."""
@@ -320,7 +325,25 @@ def run(
     # a change request somebody is already reviewing; one that skips the first answers itself.
     speaker, speaks = _resolve(request, platform=platform, repository=repository)
     if speaks:
-        manifest.warnings.append(f"nothing was published: {speaks}")
+        manifest.warnings.append(
+            f"nothing was published: {speaks}"
+            if request.publish
+            else f"the platform could not be reached: {speaks}"
+        )
+
+    # Whose code this is, and therefore whether a single command may be run over it. Settled here
+    # because everything downstream depends on it: the tools a session is offered, whether a fix is
+    # prepared, and what the report has to admit it did not establish.
+    posture, restrained = posture_for(
+        change=request.change, platform=speaker, forced=request.outside
+    )
+    manifest.posture = posture.as_json()
+    if restrained:
+        manifest.warnings.append(restrained)
+    if not posture.executes:
+        # `manifest.roles` above still lists a fixer when one is bound: that is what the run was
+        # configured with, and the posture record is what says why it never ran.
+        may_fix, patching = False, False
 
     woken: Woken | None = None
     if request.wake is not None:
@@ -362,6 +385,7 @@ def run(
         session=session,
         now=datetime.now(UTC),
         quarantine_days=overlay.quarantine_days,
+        executes=posture.executes,
     )
     # One event loop for execution and shutdown alike. A backend that holds a subprocess cannot be
     # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
@@ -399,6 +423,7 @@ def run(
             ledger=ledger,
             may_fix=may_fix,
             patching=patching,
+            restraint=posture.aside,
             proposed=proposed,
             close=owned,
         )
@@ -433,6 +458,7 @@ def run(
         unverified_facts=len(session.evidence.unverified()),
         fixes=tuple(fixes),
         notice=notice,
+        restraint=posture.restraint,
     )
 
     if request.publish and speaker is not None:
@@ -508,6 +534,7 @@ async def _conduct(
     ledger: Ledger,
     may_fix: bool,
     patching: bool,
+    restraint: str,
     proposed: tuple[str, ...],
     close: bool,
 ) -> Performed:
@@ -534,6 +561,7 @@ async def _conduct(
                 toolkits=toolkits,
                 ledger=ledger,
                 patching=patching,
+                restraint=restraint,
             )
             if performed.halted or performed.answered is not None:
                 return performed
@@ -575,6 +603,7 @@ async def _episode(
     toolkits: Toolkits,
     ledger: Ledger,
     patching: bool,
+    restraint: str,
 ) -> Plan:
     """Read the comment, then do the one thing the table says it asks for.
 
@@ -612,6 +641,7 @@ async def _episode(
                 budget=budget,
                 toolkits=toolkits,
                 ledger=ledger,
+                restraint=restraint,
             )
         case Course.PATCH:
             performed.answered = await prepare(
@@ -790,8 +820,13 @@ def _resolve(
     A wake needs the platform to read rather than to write, so it resolves one even without
     `--publish`: the comment that started the run, and whether its author may write here, are both
     facts only the platform has.
+
+    So does any run that names a change, for one fact: which repository the head lives in. Nothing
+    in a checkout says whether it came from a fork — the branch looks the same either way — and that
+    answer decides whether this run may execute a single command.
     """
-    if platform is not None or not (request.publish or request.trigger.is_woken):
+    reads = request.publish or request.trigger.is_woken or request.change is not None
+    if platform is not None or not reads:
         return platform, ""
     try:
         return GitHub.of(repository), ""
