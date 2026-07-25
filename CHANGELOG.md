@@ -7,13 +7,17 @@ Two version numbers matter together. This one is the runner; the knowledge it ex
 pinned in [`agent/config/library.yaml`](agent/config/library.yaml) and verified by digest at startup,
 so an entry that changes behaviour by moving that pin says which library version it moved to.
 
-Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html). Before 1.0 the command
-line, the overlay shape and the run record are all still allowed to change in a minor release, and
-every such change is named here.
+Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html) read as Cargo reads it
+while the major number is `0`: the **middle** number moves on a breaking change, and the **last** one
+on everything else, fixes and additions included. Breaking means a product has to change something to
+adopt it — the command line, the overlay shape, a required overlay key, or the library contract range.
+Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
 ## Unreleased
 
 The first release is not cut yet, so this section is the whole history: what the agent does today.
+Once a version is tagged, this heading is replaced by that version and no `Unreleased` section is kept
+— an empty one is a step to forget, and the library repository has already forgotten it once.
 
 ### Added
 
@@ -41,9 +45,17 @@ The first release is not cut yet, so this section is the whole history: what the
   issues and fix branches it may leave behind, its own spending limits, cross-run memory in
   `refs/agent/state`, and an escalation issue when the same check fails twice in a row.
 - Being woken by a comment: somebody replies in one of the agent's threads or on one of its issues,
-  the `intent` role reads what they ask for, and a table in code turns that into one of three courses
-  — answer in prose, re-establish the one finding it was written on, or do nothing. Where the comment
-  was left decides the playbook before any model runs; what it says decides only the course.
+  the `intent` role reads what they ask for, and a table in code turns that into one of four courses
+  — answer in prose, prepare the change and offer it, re-establish the one finding it was written on,
+  or do nothing. Where the comment was left decides the playbook before any model runs; what it says
+  decides only the course.
+- An answer to "how do I fix this?" that carries the fix. A `fixer` session makes the edit in a
+  throwaway copy of the repository at the head of the change, the overlay's verification runs over it
+  there, and the thread gets the session's paragraph, the diff **git** reports, and the label that
+  verification earned — as a `suggestion` block when the edit replaces exactly the lines the remark
+  hangs on, and as a diff otherwise. Nothing is committed and nothing is pushed: the branch under
+  review moves only if a person moves it. Needs `fixer` bound in `review.models`; without it those
+  questions are answered in prose.
 - The `writer` role, used for exactly one thing: replying to a person. The answering session can read
   the repository and gets no worktree, the reply resolves nothing and closes nothing, and every fact in
   the published comment — run, finding key, marker — is the agent's own.
@@ -72,5 +84,8 @@ The first release is not cut yet, so this section is the whole history: what the
   by. Where the two differ, the report says so in its first line. A base whose overlay this agent
   cannot read is the exception, and also says so: without it, the shape of an overlay could never
   change again, because every such change would need a run that already understood the new shape.
-- The pinned knowledge library is `0.4.0`, the first release that names the two roles a comment wakes
-  and narrows a woken maintenance run to the finding it was written on.
+- The pinned knowledge library is `0.4.1`: it names the two roles a comment wakes, narrows a woken
+  maintenance run to the finding it was written on, says that a fix task does not always end in a
+  branch — its change may be offered to whoever asked how to fix it — and records why the merge is held
+  by a required check rather than by the platform's approval flow, which matters to whoever sets up
+  branch protection.

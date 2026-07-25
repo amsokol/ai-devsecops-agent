@@ -75,6 +75,9 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {{
         nodes {{
           id
           isResolved
+          path
+          line
+          startLine
           comments(first: 1) {{ nodes {{ databaseId body }} }}
         }}
       }}
@@ -262,6 +265,12 @@ class GitHub:
                         body=body,
                         number=number,
                         resolved=bool(node.get("isResolved", False)),
+                        path=str(node.get("path") or ""),
+                        # Null on a thread the change has moved past. Read as "no anchor" rather
+                        # than falling back to the original line: an offer to replace lines that
+                        # are no longer there is worse than no offer.
+                        line=int(node.get("line") or 0),
+                        start_line=int(node.get("startLine") or 0),
                     )
                 )
             info = block.get("pageInfo") or {}

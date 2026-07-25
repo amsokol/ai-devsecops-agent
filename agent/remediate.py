@@ -402,7 +402,7 @@ async def _one(
     changed = tree.dirty()
     if verification.failed:
         verification = verification.against_base(
-            await asyncio.to_thread(_already_broken, tree, verification.failed, toolkits, task)
+            await asyncio.to_thread(already_broken, tree, verification.failed, toolkits, task)
         )
     fix = Fix(
         job=job,
@@ -437,7 +437,7 @@ async def _one(
     return fix
 
 
-def _already_broken(
+def already_broken(
     tree: Worktree,
     failed: tuple[tuple[str, ...], ...],
     toolkits: Toolkits,

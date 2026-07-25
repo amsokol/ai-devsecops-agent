@@ -37,7 +37,13 @@ about length would otherwise turn one question into a page nobody reads."""
 
 @dataclass(slots=True)
 class Answered:
-    """What the answering session produced, and what became of it on the platform."""
+    """What an answering session produced, and what became of it on the platform.
+
+    Shared by the two things a run can say back to a person: prose, and prose with a prepared change
+    under it. They differ in what the agent adds beneath — "nothing was changed" and "a verified
+    change is offered above" are different promises — so the sentences are supplied by whoever
+    produced the reply rather than fixed here.
+    """
 
     outcome: AnswerOutcome = AnswerOutcome.UNVERIFIED
     reply: str = ""
@@ -47,6 +53,12 @@ class Answered:
     posted: bool = False
     reference: str = ""
     failure: str = ""
+    task: str = "wake-answer"
+    """Which session paid for this, as the cost record names it."""
+    facts: tuple[str, ...] = ()
+    """What the agent states under the reply, in its own words. Never a model's."""
+    prepared: dict[str, Any] = field(default_factory=dict)
+    """What was prepared, when anything was: the verification, the files, the form of the offer."""
     attempts: list[Attempt] = field(default_factory=list)
     calls: list[dict[str, Any]] = field(default_factory=list)
 
@@ -59,7 +71,9 @@ class Answered:
             "posted": self.posted,
             "reference": self.reference,
             "failure": self.failure,
+            "task": self.task,
             "reply": self.reply,
+            "prepared": self.prepared,
             "attempts": [attempt.as_json() for attempt in self.attempts],
             "calls": self.calls,
         }
@@ -249,13 +263,11 @@ def _body(woken: Woken, written: Answered, *, run: str) -> str:
             "Nothing was changed, and nothing about the finding itself has been re-established by "
             "this run.",
         ]
-    lines += [
-        "",
-        "---",
-        "",
+    stated = written.facts or (
         f"Written by `ai-devsecops-agent` in run `{run}` about finding `{woken.key}`, from what "
         "that run could establish. Nothing in the repository was changed.",
-    ]
+    )
+    lines += ["", "---", "", *stated]
     return marker.stamp("\n".join(lines), woken.key)
 
 

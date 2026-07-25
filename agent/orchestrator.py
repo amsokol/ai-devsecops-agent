@@ -30,6 +30,7 @@ from agent.issues import Tracking, track_findings
 from agent.library import Library
 from agent.manifest import Manifest
 from agent.overlay import MAINTENANCE, REVIEW, VALUES_FILE, Overlay, digest_on_disk, within
+from agent.patch import prepare
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
 from agent.propose import propose_fixes
@@ -291,8 +292,12 @@ def run(
     # answering model is unbound *after* classifying would leave a person with silence.
     may_fix = request.trigger.is_maintenance and not request.dry_run and not request.plan_only
     needed = {task.role for task in plan.tasks} | ({Role.FIXER} if may_fix else set())
+    # A patch offered in a review thread is a fixing session, so it needs that role bound too. Read
+    # rather than required: a product that binds no fixer for its reviews has decided its agent
+    # explains instead of proposing, and answering in prose is a course the table already has.
+    patching = request.trigger is Trigger.COMMENT_ON_CHANGE and Role.FIXER in models.bindings
     if request.wake is not None:
-        needed |= {Role.INTENT, Role.WRITER}
+        needed |= {Role.INTENT, Role.WRITER} | ({Role.FIXER} if patching else set())
     manifest.roles = [models.for_role(role).as_json() for role in sorted(needed)]
 
     # Recorded before the plan-only exit: seeing what a trigger would be allowed to spend is half
@@ -393,6 +398,7 @@ def run(
             toolkits=toolkits,
             ledger=ledger,
             may_fix=may_fix,
+            patching=patching,
             proposed=proposed,
             close=owned,
         )
@@ -501,6 +507,7 @@ async def _conduct(
     toolkits: Toolkits,
     ledger: Ledger,
     may_fix: bool,
+    patching: bool,
     proposed: tuple[str, ...],
     close: bool,
 ) -> Performed:
@@ -521,10 +528,12 @@ async def _conduct(
                 roster=roster,
                 library=library,
                 overlay=overlay,
+                repository=repository,
                 run_directory=run_directory,
                 budget=budget,
                 toolkits=toolkits,
                 ledger=ledger,
+                patching=patching,
             )
             if performed.halted or performed.answered is not None:
                 return performed
@@ -560,14 +569,16 @@ async def _episode(
     roster: Roster,
     library: Library,
     overlay: Overlay,
+    repository: Repository,
     run_directory: Path,
     budget: Budget,
     toolkits: Toolkits,
     ledger: Ledger,
+    patching: bool,
 ) -> Plan:
     """Read the comment, then do the one thing the table says it asks for.
 
-    Three outcomes, and each of them is cheaper than a full run — which is the point. Somebody who
+    Four outcomes, and each of them is cheaper than a full run — which is the point. Somebody who
     comments on one issue is asking about one thing, and a weekly sweep in reply would make a
     question the most expensive way to ask one.
     """
@@ -578,6 +589,7 @@ async def _episode(
         budget=budget,
         toolkits=toolkits,
         ledger=ledger,
+        patching=patching,
     )
     match performed.read.course:
         case Course.IGNORE:
@@ -600,6 +612,22 @@ async def _episode(
                 budget=budget,
                 toolkits=toolkits,
                 ledger=ledger,
+            )
+        case Course.PATCH:
+            performed.answered = await prepare(
+                woken,
+                repository=repository,
+                roster=roster,
+                library=library,
+                playbook=plan.playbook,
+                notes=overlay.notes,
+                surfaces=overlay.verification,
+                trees_dir=run_directory / "patch",
+                tasks_dir=run_directory / "tasks",
+                budget=budget,
+                toolkits=toolkits,
+                ledger=ledger,
+                run=manifest.run_id,
             )
         case Course.RECHECK:
             narrowed, why = narrow(plan, woken.key)
@@ -739,6 +767,14 @@ def _wake_report(manifest: Manifest, *, performed: Performed, woken: Woken | Non
     if performed.halted:
         lines += ["", performed.halted]
     if performed.answered is not None:
+        prepared = performed.answered.prepared
+        if prepared:
+            changed = ", ".join(f"`{path}`" for path in prepared.get("changed") or ()) or "nothing"
+            verification = prepared.get("verification") or {}
+            lines.append(
+                f"- Prepared a change ({prepared.get('form')}) in {changed}, "
+                + ("verified" if verification.get("passed") else "not verified")
+            )
         lines += ["", "## What was said", "", performed.answered.reply or "(nothing)"]
     return "\n".join(lines) + "\n"
 
@@ -1025,9 +1061,10 @@ def _spent(manifest: Manifest, performed: Performed) -> None:
     fact would otherwise report the analysis it did and not the reading that chose it — and the
     ledger, which admitted both, would disagree with the manifest about what the run cost.
     """
+    written = performed.answered
     for task, attempts in (
         ("wake-intent", performed.read.attempts if performed.read else []),
-        ("wake-answer", performed.answered.attempts if performed.answered else []),
+        (written.task if written else "wake-answer", written.attempts if written else []),
     ):
         manifest.models += [
             {"task": task, "attempt": attempt.number} | attempt.session.as_json()

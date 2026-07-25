@@ -190,6 +190,19 @@ class Worktree:
             line[3:].strip().strip('"') for line in output.splitlines() if line[3:].strip()
         )
 
+    def diff(self, *, context: int = 3) -> str:
+        """What the session left, as git renders it, new files included.
+
+        `--intent-to-add` is what makes an untracked file appear in a diff at all. It stages nothing
+        and is safe here: this checkout exists for one task, and a commit that follows adds
+        everything anyway.
+
+        Called instead of asking the session for its own diff. A patch offered to a person has to be
+        the one that was verified, and the only text that is certainly that is git's.
+        """
+        _git(self.path, "add", "--all", "--intent-to-add")
+        return _git(self.path, "diff", f"--unified={context}", "HEAD")
+
     def restore(self) -> None:
         """Put the checkout back to the head it started from, keeping ignored files.
 

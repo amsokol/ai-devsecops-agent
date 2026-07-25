@@ -86,6 +86,24 @@ class Thread:
     number: int = 0
     """The change this thread lives on, because replying needs it."""
     resolved: bool = False
+    path: str = ""
+    line: int = 0
+    start_line: int = 0
+    """Where the thread hangs: the file, the last line it covers, and the first when it covers
+    several. Zero and empty mean the platform would not say — which is the ordinary answer for a
+    thread whose lines the change has since moved past.
+
+    Read because a `suggestion` block is applied to exactly these lines and to no others. A patch
+    that changes anything else cannot be offered as one, however well it reads: the person would
+    click "commit" and get a different edit from the one that was verified.
+    """
+
+    @property
+    def anchor(self) -> tuple[int, int]:
+        """The inclusive line range this thread covers, or `(0, 0)` when it is not known."""
+        if not self.line:
+            return (0, 0)
+        return (self.start_line or self.line, self.line)
 
     def as_json(self) -> dict[str, Any]:
         return {"thread": self.id, "key": self.key, "resolved": self.resolved}
