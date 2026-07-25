@@ -16,6 +16,11 @@ Closing on absence alone would turn the first scanner outage into a week of imag
 *Silence when nothing is proved.* A finding whose owning check failed leaves its issue exactly as it
 was: no comment, no label change, nothing. "Still present" would be as unfounded as a closure, and a
 weekly reminder that nothing is known is what teaches people to mute the agent.
+
+The open set is read once, before anything is written. That order is not a matter of style: GitHub's
+label listing is a secondary index, and it took five seconds to admit a new issue when this path was
+first driven against a real repository. Reading it up front makes a run's own writes irrelevant to
+what it sees, and "one run at a time" keeps two runs from racing.
 """
 
 from __future__ import annotations

@@ -182,9 +182,16 @@ class Proposal:
     number: int
     head: str
     reference: str = ""
+    author: str = ""
+    """Who the platform recorded as opening it, the only account that proves whose it is."""
 
     def as_json(self) -> dict[str, Any]:
-        return {"number": self.number, "head": self.head, "reference": self.reference}
+        return {
+            "number": self.number,
+            "head": self.head,
+            "reference": self.reference,
+            "author": self.author,
+        }
 
 
 @dataclass(frozen=True, slots=True)

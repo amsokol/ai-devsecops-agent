@@ -213,7 +213,10 @@ it on the repositories it reviews and nothing else — an installation is the bo
 
 By hand, outside CI, `scripts/app_token.py` mints the same token from the App's id and private key,
 so a live check speaks as the App rather than as its author. Keep the key out of the repository;
-`*.pem` is ignored.
+`*.pem` is ignored. `scripts/live_maintain_check.py` drives the other half against a real repository —
+a scratch branch pushed, proposed, tracked as an issue and then cleaned up — and prints the account
+that owned each step. That check is how the label listing's few seconds of lag was measured, which is
+why the reconciliation reads the open set before it writes anything.
 
 ```yaml
 permissions:

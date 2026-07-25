@@ -190,7 +190,12 @@ class FakePlatform:
             # that allowed it would hide the ordering bug that causes it.
             raise ScmError(f"no branch named {new.head} on the platform")
         number = len(self.proposed) + 100
-        opened = Proposal(number=number, head=new.head, reference=f"fake://change/{number}")
+        opened = Proposal(
+            number=number,
+            head=new.head,
+            reference=f"fake://change/{number}",
+            author=self.login,
+        )
         self.proposed.append(opened)
         self.bodies.append((new.head, new.body))
         self.calls.append(Call("propose", detail=new.title))

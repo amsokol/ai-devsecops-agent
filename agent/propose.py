@@ -37,12 +37,16 @@ class Proposed:
     posted: list[Posted] = field(default_factory=list)
     opened: int = 0
     failure: str = ""
+    authors: set[str] = field(default_factory=set)
+    """Who the platform says opened them. Recorded because "the agent proposed this" is a claim, and
+    an account is the only thing that settles it."""
 
     def as_json(self) -> dict[str, Any]:
         return {
             "posted": [item.as_json() for item in self.posted],
             "opened": self.opened,
             "failure": self.failure,
+            "authors": sorted(self.authors),
         }
 
 
@@ -82,6 +86,7 @@ def propose_fixes(
             record.posted.append(Posted("not-proposed", fix.job.key, str(error)))
             continue
         record.opened += 1
+        record.authors.add(opened.author)
         record.posted.append(Posted("proposed", fix.job.key, opened.reference))
     return record
 

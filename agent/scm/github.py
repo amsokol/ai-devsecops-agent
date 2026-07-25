@@ -431,10 +431,12 @@ class GitHub:
                 "base": new.base,
             },
         )
+        wrote = got.get("user")
         return Proposal(
             number=int(got.get("number", 0)),
             head=new.head,
             reference=str(got.get("html_url") or ""),
+            author=str(wrote.get("login", "")) if isinstance(wrote, dict) else "",
         )
 
     def _ensure_label(self, label: str) -> None:
