@@ -94,13 +94,25 @@ class LibraryPin:
 
 
 @dataclass(frozen=True, slots=True)
+class BudgetConfig:
+    """Limits for one kind of run: per task, and for the run as a whole."""
+
+    task_seconds: int
+    task_steps: int | None
+    max_parallel: int
+    run_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class Execution:
-    """Which backend runs subagents, on which model, and what one task may spend."""
+    """Which backend runs subagents, on which model, and what a run may spend."""
 
     backend: str
     model: str
-    task_seconds: int
-    task_steps: int | None
+    budget: BudgetConfig
+    scheduled_budget: BudgetConfig
+    """Usually tighter: a scheduled run has nobody watching it while it spends."""
+
     sandbox: bool = True
     """Whether the backend confines its own tools with the SDK's sandbox.
 
@@ -108,6 +120,9 @@ class Execution:
     through those tools. Environments that cannot sandbox have to say so explicitly, because a
     silent downgrade is how a run ends up with fewer guarantees than its manifest claims.
     """
+
+    def budget_for(self, trigger: Trigger) -> BudgetConfig:
+        return self.scheduled_budget if trigger.is_scheduled else self.budget
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,20 +189,48 @@ class Config:
 def _read_execution(directory: Path) -> Execution:
     path = directory / "execution.yaml"
     raw = load_yaml_mapping(path)
-    budget = raw.get("budget") or {}
-    if not isinstance(budget, dict):
-        raise ConfigError(f"{path}: budget must be a mapping")
-    seconds = _positive(budget.get("task_seconds", 900), path=path, name="task_seconds")
-    steps = budget.get("task_steps")
+    budget = _read_budget(raw.get("budget"), path=path, where="budget", fallback=None)
+    scheduled = _read_budget(
+        raw.get("scheduled_budget"), path=path, where="scheduled_budget", fallback=budget
+    )
     sandbox = raw.get("sandbox", True)
     if not isinstance(sandbox, bool):
         raise ConfigError(f"{path}: sandbox must be true or false, got {sandbox!r}")
     return Execution(
         backend=str(raw.get("backend") or "").strip() or _missing(path, "backend"),
         model=str(raw.get("model") or "").strip() or _missing(path, "model"),
-        task_seconds=seconds,
-        task_steps=_positive(steps, path=path, name="task_steps") if steps is not None else None,
+        budget=budget,
+        scheduled_budget=scheduled,
         sandbox=sandbox,
+    )
+
+
+def _read_budget(
+    raw: Any, *, path: Path, where: str, fallback: BudgetConfig | None
+) -> BudgetConfig:
+    """One budget section. Omitted keys fall back, so tightening one knob restates nothing else."""
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: {where} must be a mapping")
+    base = fallback or BudgetConfig(
+        task_seconds=900, task_steps=None, max_parallel=4, run_tokens=None
+    )
+    steps = raw.get("task_steps", base.task_steps)
+    tokens = raw.get("run_tokens", base.run_tokens)
+    return BudgetConfig(
+        task_seconds=_positive(
+            raw.get("task_seconds", base.task_seconds), path=path, name=f"{where}.task_seconds"
+        ),
+        task_steps=(
+            _positive(steps, path=path, name=f"{where}.task_steps") if steps is not None else None
+        ),
+        max_parallel=_positive(
+            raw.get("max_parallel", base.max_parallel), path=path, name=f"{where}.max_parallel"
+        ),
+        run_tokens=(
+            _positive(tokens, path=path, name=f"{where}.run_tokens") if tokens is not None else None
+        ),
     )
 
 

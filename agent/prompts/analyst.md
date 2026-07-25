@@ -26,6 +26,10 @@ Do not reason about which version is newer, how many days have passed, or whethe
 elapsed. Ask the tool. Your arithmetic is not reproducible and will not be trusted; the tool's answer
 is recorded and can be checked later.
 
+Read narrowly. Start from what the ecosystem document tells you to detect and from the files in
+scope, and prefer a targeted search to listing or reading the whole repository. Your calls are
+limited, and a wide scan spends them on files that cannot change the answer.
+
 When a fact cannot be obtained — no tooling exists, a host is unreachable, a page changed shape —
 report the outcome `unverified` with the reason. That is a useful, honest answer. Reporting `clean`
 when you could not check is the one outcome that is never acceptable: it converts a broken check into

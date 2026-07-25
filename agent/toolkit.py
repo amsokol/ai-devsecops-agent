@@ -82,10 +82,12 @@ class Toolkit:
         task: PlannedTask,
         now: datetime,
         quarantine_days: int,
+        step_limit: int | None = None,
     ) -> None:
         self.task = task
         self.now = now
         self.quarantine_days = quarantine_days
+        self.step_limit = step_limit
         self._session = session
         self._tools: TaskTools = session.for_task(task.id)
         self._calls: list[Call] = []
@@ -264,6 +266,14 @@ class Toolkit:
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Dispatch by name. An unknown tool is an error, never a silent no-op."""
+        if self.step_limit is not None and len(self._calls) >= self.step_limit:
+            # Told to the subagent rather than killed silently: it still has to write a result file,
+            # and the honest one here is `exhausted` — the check did not finish.
+            raise Refused(
+                f"this task's step budget of {self.step_limit} calls is spent. Write the result "
+                "file now: `exhausted` if you could not finish the check, or `findings` / `clean` "
+                "if what you already established answers it."
+            )
         for tool in self.tools():
             if tool.name == name:
                 return tool.run(arguments)
@@ -614,10 +624,11 @@ class Toolkits:
     now: datetime
     quarantine_days: int
 
-    def for_task(self, task: PlannedTask) -> Toolkit:
+    def for_task(self, task: PlannedTask, *, step_limit: int | None = None) -> Toolkit:
         return Toolkit(
             session=self.session,
             task=task,
             now=self.now,
             quarantine_days=self.quarantine_days,
+            step_limit=step_limit,
         )

@@ -65,12 +65,30 @@ Exit codes are an interface, because CI acts on them: `0` permitted, `5` blocked
 `64` configuration error, `2` internal failure. A run that could not execute its tasks exits `6` and
 never `0` — the absence of a result is not a result.
 
+## Budgets
+
+Analysis tasks are independent, so they run concurrently, and `agent/config/execution.yaml` states
+what they may spend. Per task: wall clock and a ceiling on tool calls. Per run: how many sessions
+overlap, and optionally a shared token ceiling. A scheduled run gets its own, tighter section — it
+spends with nobody watching.
+
+Every limit ends the same way. A task that hits one, or that the shared ceiling could not pay for, is
+recorded as `exhausted`, and a required task in that state makes the run inconclusive. Nothing the
+agent did not check is ever reported as checked, so the cheapest way to make a gate pass remains
+fixing the code rather than starving the run.
+
+A token ceiling only binds where the backend reports usage. Sessions that report nothing are counted
+separately in the manifest rather than as zero, because a total that quietly omits them is not a
+limit. There is no money ceiling: it needs a price per model, and a limit computed from prices nobody
+maintains would refuse work for a wrong number.
+
 ## Status
 
-Stage 3: the decision path, the tool registry and the Cursor SDK adapter are in place. A run can be
-narrowed with `--only` (for example `deps-vuln@python-uv`) while the remaining analyst tasks, true
-parallelism and GitHub actions are still ahead. `backend: fake` remains available for CI that must
-exercise the pipeline without a model.
+Stage 4: concurrency and budgets are in place on top of the decision path, the tool registry and the
+Cursor SDK adapter. Every analyst capability the library defines can run, a run can still be narrowed
+with `--only` (for example `deps-vuln@python-uv`), and GitHub actions, the `fixer` role and the eval
+harness are still ahead. `backend: fake` remains available for CI that must exercise the pipeline
+without a model.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.

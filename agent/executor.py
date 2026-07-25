@@ -7,13 +7,14 @@ switched off by anyone who can break a tool or exhaust a budget.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent.backends.port import Backend, Brief, Budget, Failure, SessionResult
 from agent.brief import compose, digest, knowledge_for, role_instructions
+from agent.budget import Ledger, RunBudget
 from agent.domain import Outcome, Plan, PlannedTask, Reason
-from agent.errors import ConfigError
 from agent.evidence import EvidenceStore
 from agent.findings import Finding
 from agent.library import Library
@@ -69,25 +70,46 @@ async def execute(
     tasks_dir: Path,
     budget: Budget,
     toolkits: Toolkits,
+    run_budget: RunBudget | None = None,
+    ledger: Ledger | None = None,
 ) -> list[Executed]:
-    """Run every planned task in order.
+    """Run the planned tasks concurrently, up to the run budget's parallelism.
 
-    Sequential for now. Concurrency belongs with budgets: running four sessions at once without a
-    run budget that they share turns a cost ceiling into a suggestion, so the two arrive together.
+    Analysis tasks are independent, so they overlap. Two properties are preserved regardless of how
+    they interleave: results come back in plan order, so a report does not reshuffle between runs;
+    and a task the shared budget could not afford is recorded as `exhausted` rather than skipped, so
+    nothing that was never attempted can be mistaken for a check that passed.
     """
-    return [
-        await _execute_one(
-            task,
-            backend=backend,
-            library=library,
-            notes=notes,
-            evidence=evidence,
-            tasks_dir=tasks_dir,
-            budget=budget,
-            toolkits=toolkits,
-        )
-        for task in plan.tasks
-    ]
+    if not plan.tasks:
+        return []
+
+    accounting = ledger or Ledger(run_budget or RunBudget())
+    slots = asyncio.Semaphore(accounting.budget.max_parallel)
+    results: list[Executed | None] = [None] * len(plan.tasks)
+
+    async def run_one(index: int, task: PlannedTask) -> None:
+        async with slots:
+            # Checked after the slot is taken, not before: while this task waited its turn, the
+            # tasks ahead of it may have spent what was left.
+            if not await accounting.may_start():
+                results[index] = _not_afforded(task, accounting.exhausted_detail())
+                return
+            executed = await _execute_one(
+                task,
+                backend=backend,
+                library=library,
+                notes=notes,
+                evidence=evidence,
+                tasks_dir=tasks_dir,
+                budget=budget,
+                toolkits=toolkits,
+            )
+            for attempt in executed.attempts:
+                await accounting.record(attempt.session.usage)
+            results[index] = executed
+
+    await asyncio.gather(*(run_one(index, task) for index, task in enumerate(plan.tasks)))
+    return [item for item in results if item is not None]
 
 
 async def _execute_one(
@@ -105,7 +127,7 @@ async def _execute_one(
     knowledge = knowledge_for(library, task)
     # One toolkit for the task, not per attempt: a fact established before a result was rejected is
     # still a fact, and the retry can cite it instead of paying for the call again.
-    toolkit = toolkits.for_task(task)
+    toolkit = toolkits.for_task(task, step_limit=budget.steps)
     executed = Executed(task=task, outcome=_unverified(task, Reason.UNAVAILABLE))
     rejection = ""
     try:
@@ -211,8 +233,41 @@ async def _attempts(
     return executed
 
 
+def _not_afforded(task: PlannedTask, detail: str) -> Executed:
+    """A task the shared budget could not pay for: no session, no findings, exhausted.
+
+    Recorded as an attempt with no model behind it, so the manifest shows why the task is missing
+    instead of leaving a reader to guess that the plan changed.
+    """
+    return Executed(
+        task=task,
+        outcome=TaskOutcome(
+            id=task.id,
+            capability=task.capability,
+            required=task.required,
+            outcome=Outcome.EXHAUSTED,
+            reason=Reason.EXHAUSTED,
+        ),
+        attempts=[
+            Attempt(
+                number=0,
+                session=SessionResult(
+                    backend="none",
+                    model="",
+                    duration_ms=0,
+                    failure=Failure.EXHAUSTED,
+                    detail=detail,
+                ),
+                prompt_digest="",
+                result_path=Path(),
+            )
+        ],
+    )
+
+
 def _from_failure(task: PlannedTask, failure: Failure) -> TaskOutcome:
-    outcome = Outcome.EXHAUSTED if failure is Failure.TIMED_OUT else Outcome.UNVERIFIED
+    ran_out = failure in {Failure.TIMED_OUT, Failure.EXHAUSTED}
+    outcome = Outcome.EXHAUSTED if ran_out else Outcome.UNVERIFIED
     return TaskOutcome(
         id=task.id,
         capability=task.capability,
@@ -230,13 +285,3 @@ def _unverified(task: PlannedTask, reason: Reason) -> TaskOutcome:
         outcome=Outcome.UNVERIFIED,
         reason=reason,
     )
-
-
-def budget_from(raw: dict[str, object], *, where: Path) -> Budget:
-    seconds = raw.get("task_seconds", 600)
-    steps = raw.get("task_steps")
-    if not isinstance(seconds, int) or seconds <= 0:
-        raise ConfigError(f"{where}: task_seconds must be a positive integer")
-    if steps is not None and (not isinstance(steps, int) or steps <= 0):
-        raise ConfigError(f"{where}: task_steps must be a positive integer when set")
-    return Budget(seconds=seconds, steps=steps)

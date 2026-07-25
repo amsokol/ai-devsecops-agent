@@ -1,4 +1,4 @@
-# Which backend runs the subagents, and what one task may spend.
+# Which backend runs the subagents, and what a run may spend.
 #
 # One model for every role for now. The mapping "role → backend and model" arrives with the eval
 # harness: choosing models before there is a way to measure them would just be taste with a version
@@ -16,3 +16,23 @@ budget:
   # Wall clock for one task. A task that hits it ends as `exhausted`, which refuses the merge — the
   # run says the check did not finish rather than that it found nothing.
   task_seconds: 900
+
+  # Tool calls one task may make. A wide repository scan is what usually burns a session, and a
+  # ceiling here turns that into a named `exhausted` outcome instead of a surprise bill.
+  task_steps: 120
+
+  # How many sessions run at once. Not an optimisation: providers rate-limit, so an unbounded
+  # fan-out becomes a series of refusals rather than a faster run.
+  max_parallel: 4
+
+  # Shared token ceiling for the whole run. When it is spent, tasks that have not started end as
+  # `exhausted` and the run is inconclusive; tasks already in flight finish. Only enforceable where
+  # the backend reports usage — a run whose backend reports nothing is limited by time and steps.
+  # run_tokens: 6000000
+
+# A scheduled run has nobody watching it while it spends, so it gets less. Keys omitted here are
+# inherited from `budget` above, which is why only the differences are listed.
+scheduled_budget:
+  task_seconds: 600
+  task_steps: 80
+  max_parallel: 2

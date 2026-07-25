@@ -41,7 +41,7 @@ and move on. Do not attempt the same thing through another tool."""
 RESULT_SHAPE = """\
 ```json
 {
-  "outcome": "findings | clean | unverified",
+  "outcome": "findings | clean | unverified | exhausted",
   "reason": "no-tooling | unavailable | unexpected-shape | not-permitted",
   "notes": "optional, one or two sentences about the boundary of what you checked",
   "findings": [
@@ -65,6 +65,8 @@ RESULT_SHAPE = """\
 Rules the validator enforces:
 
 * `reason` is required when `outcome` is `unverified`, and only those four values are accepted.
+* `exhausted` is for a budget that ran out before the check finished — a step limit or the clock. It
+  needs no reason; the core supplies one. Use it instead of `clean` whenever you stopped early.
 * `clean` may not carry findings; `findings` requires at least one.
 * `subject` names a `package` or a `path`, never both, and its ecosystem is this task's, so it is
   not given. The file a package was found in belongs in `location`. Fields you do not need are

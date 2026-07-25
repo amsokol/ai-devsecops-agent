@@ -15,6 +15,7 @@ from pathlib import Path
 from agent import __version__
 from agent.backends.port import Backend, Budget
 from agent.backends.select import make_backend
+from agent.budget import Ledger, RunBudget
 from agent.config import Config
 from agent.domain import Plan, Trigger
 from agent.errors import ConfigError, ExitCode
@@ -168,6 +169,17 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     grants = grant(library=library, ecosystems=overlay.ecosystems, ceiling=config.ceiling)
     manifest.grants = {"binaries": sorted(grants.binaries), "hosts": sorted(grants.hosts)}
 
+    # Recorded before the plan-only exit: seeing what a trigger would be allowed to spend is half
+    # the reason to ask for a plan without running one.
+    limits = config.execution.budget_for(request.trigger)
+    manifest.budget = {
+        "task_seconds": limits.task_seconds,
+        "task_steps": limits.task_steps,
+        "max_parallel": limits.max_parallel,
+        "run_tokens": limits.run_tokens,
+        "scheduled": request.trigger.is_scheduled,
+    }
+
     if request.plan_only:
         manifest.finish(PLANNED)
         return RunRecord(manifest, manifest.write(request.run_dir), ExitCode.OK)
@@ -196,6 +208,7 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     # One event loop for execution and shutdown alike. A backend that holds a subprocess cannot be
     # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
     # fails with a future attached to another loop.
+    ledger = Ledger(RunBudget(max_parallel=limits.max_parallel, tokens=limits.run_tokens))
     executed = asyncio.run(
         _execute(
             plan,
@@ -204,11 +217,13 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
             notes=overlay.notes,
             evidence=session.evidence,
             tasks_dir=run_directory / "tasks",
-            budget=Budget(seconds=config.execution.task_seconds, steps=config.execution.task_steps),
+            budget=Budget(seconds=limits.task_seconds, steps=limits.task_steps),
             toolkits=toolkits,
+            ledger=ledger,
             close=owned,
         )
     )
+    manifest.budget["spend"] = ledger.spend.as_json()
 
     verdict = _conclude(manifest, executed, rules=rules, session=session)
     report = render(
@@ -237,6 +252,7 @@ async def _execute(
     tasks_dir: Path,
     budget: Budget,
     toolkits: Toolkits,
+    ledger: Ledger,
     close: bool,
 ) -> list[Executed]:
     try:
@@ -249,6 +265,7 @@ async def _execute(
             tasks_dir=tasks_dir,
             budget=budget,
             toolkits=toolkits,
+            ledger=ledger,
         )
     finally:
         if close:

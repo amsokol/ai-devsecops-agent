@@ -31,13 +31,19 @@ class Failure(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     TIMED_OUT = "timed-out"
+    EXHAUSTED = "exhausted"
+    """The run's shared budget was spent, so this session never happened.
+
+    Separate from `TIMED_OUT`: both refuse the merge, but one says the task was too slow and the
+    other says the run could not afford it, and the fix is different.
+    """
 
     @property
     def reason(self) -> Reason:
         match self:
             case Failure.NOT_STARTED | Failure.FAILED | Failure.CANCELLED:
                 return Reason.UNAVAILABLE
-            case Failure.TIMED_OUT:
+            case Failure.TIMED_OUT | Failure.EXHAUSTED:
                 return Reason.EXHAUSTED
 
 
