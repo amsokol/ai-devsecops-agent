@@ -34,6 +34,21 @@ THRESHOLD = 2
 
 FAILURES = "failures"
 
+SEGMENT = "failure"
+"""What marks a key as being about a check rather than about something the check found."""
+
+
+def about_a_failure(key: str) -> bool:
+    """Whether this key belongs to a failing check rather than to a finding.
+
+    Closing the two is not the same act. A finding's issue closes on an absence, which is weak
+    evidence and is made to wait for a second run. This closes on the check having completed, which
+    is the thing itself: the issue says the check has not worked since a date, and a completed run
+    contradicts that outright. Making the good news wait a week would also break what the issue
+    promises its reader.
+    """
+    return f":{SEGMENT}:" in key
+
 
 @dataclass(frozen=True, slots=True)
 class Escalation:
@@ -107,7 +122,7 @@ def _key(outcome: TaskOutcome) -> str:
     """`capability:failure:reason` — the capability first, because that is where every other part of
     the agent reads it from, and closing this issue obeys the same rule as closing a finding's."""
     reason = outcome.reason.value if outcome.reason is not None else outcome.outcome.value
-    return f"{outcome.capability}:failure:{reason}"
+    return f"{outcome.capability}:{SEGMENT}:{reason}"
 
 
 def _capability(key: str) -> str:

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Any
+
 import pytest
+from agent.absence import Absences
 from agent.domain import Outcome, RunResult
 from agent.evidence import Reliability, Subject
 from agent.findings import Action, Finding, Klass, Location, Severity
@@ -13,6 +17,7 @@ from agent.scm.port import Issue
 from agent.verdict import Judged, TaskOutcome, Verdict
 
 HEAD = "0f1e2d3c4b5a69788796a5b4c3d2e1f009182736"
+WHEN = datetime(2026, 7, 25, 9, 0, tzinfo=UTC)
 CAPABILITY = "capabilities/deps-vuln"
 CLEAN = TaskOutcome(
     id="deps-vuln@python-uv", capability=CAPABILITY, required=True, outcome=Outcome.CLEAN
@@ -52,10 +57,28 @@ def track(
     *,
     outcomes: tuple[TaskOutcome, ...] = (CLEAN,),
     limit: int = 10,
+    memory: dict[str, Any] | None = None,
 ) -> Tracking:
-    return track_findings(
-        platform, verdict=verdict, outcomes=outcomes, head=HEAD, limit=limit, label=LABEL
+    """One run of the reconciliation, carrying the streaks forward when a test passes a memory.
+
+    A test that passes none is a first run, which is what most of them are about; closing needs two,
+    so a test about a closure is a test that keeps the memory between its calls.
+    """
+    carried = memory if memory is not None else {}
+    counted = Absences.of(carried, outcomes=outcomes, run="run-1", when=WHEN)
+    record = track_findings(
+        platform, verdict=verdict, absences=counted, head=HEAD, limit=limit, label=LABEL
     )
+    if memory is not None:
+        memory.update(counted.document(carried))
+    return record
+
+
+def until_closed(platform: FakePlatform, verdict: Verdict, **rest: Any) -> Tracking:
+    """The run in which an absent finding is finally closed, having been absent once before."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict, memory=memory, **rest)
+    return track(platform, verdict, memory=memory, **rest)
 
 
 def what(record: Tracking) -> list[str]:
@@ -117,7 +140,7 @@ def test_a_finding_that_is_gone_is_closed_with_the_evidence_that_settles_it(
 ) -> None:
     track(platform, verdict_of(judged(finding())))
 
-    cleared = track(platform, verdict_of())
+    cleared = until_closed(platform, verdict_of())
 
     assert what(cleared) == ["closed"]
     assert cleared.closed == 1
@@ -126,6 +149,68 @@ def test_a_finding_that_is_gone_is_closed_with_the_evidence_that_settles_it(
     assert key == finding().key
     assert CAPABILITY in note
     assert HEAD[:12] in note
+
+
+def test_one_complete_run_without_a_finding_is_not_yet_a_closure(platform: FakePlatform) -> None:
+    """A closure is a claim nobody revisits, and a task is asked to be exhaustive rather than
+    proved to be. One run of it costs a week of visibility; being wrong costs the tracker."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+
+    once = track(platform, verdict_of(), memory=memory)
+
+    assert what(once) == ["kept-open"]
+    assert "next run" in once.posted[0].detail
+    assert len(platform.tracked) == 1
+    assert not platform.notes
+
+
+def test_a_finding_that_comes_back_starts_its_absence_over(platform: FakePlatform) -> None:
+    """Otherwise two absences months apart, with the problem reported in between, close an issue
+    about a problem that is still there."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+    track(platform, verdict_of(), memory=memory)
+    track(platform, verdict_of(judged(finding())), memory=memory)
+
+    again = track(platform, verdict_of(), memory=memory)
+
+    assert what(again) == ["kept-open"]
+    assert len(platform.tracked) == 1
+
+
+def test_a_run_that_could_not_look_does_not_spend_the_absence(platform: FakePlatform) -> None:
+    """A narrowed or broken run leaves the count exactly as it was. Treating "did not look" as one
+    of the two would close everything in a repository whose runs alternate between ecosystems."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+    track(platform, verdict_of(), memory=memory)
+    track(platform, verdict_of(), outcomes=(), memory=memory)
+
+    third = track(platform, verdict_of(), outcomes=(UNVERIFIED,), memory=memory)
+
+    assert what(third) == ["kept-open"]
+    assert len(platform.tracked) == 1
+    assert what(track(platform, verdict_of(), memory=memory)) == ["closed"]
+
+
+def test_an_issue_a_person_is_reading_settles_on_the_first_answer(
+    platform: FakePlatform,
+) -> None:
+    """The wait is for the issues nobody is looking at. Somebody who wrote on this one is told what
+    the recheck found on it, and "come back next week" is the wrong reply to that."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+    asked = Absences.of(
+        memory, outcomes=(CLEAN,), run="run-2", when=WHEN, asked=frozenset({finding().key})
+    )
+
+    record = track_findings(
+        platform, verdict=verdict_of(), absences=asked, head=HEAD, limit=10, label=LABEL
+    )
+
+    assert what(record) == ["closed"]
+    assert not platform.tracked
 
 
 def test_a_check_that_did_not_finish_leaves_the_issue_exactly_as_it_was(
@@ -138,7 +223,7 @@ def test_a_check_that_did_not_finish_leaves_the_issue_exactly_as_it_was(
     unproved = track(platform, verdict_of(), outcomes=(UNVERIFIED,))
 
     assert what(unproved) == ["kept-open"]
-    assert "rather than clean" in unproved.posted[0].detail
+    assert "never got to the end" in unproved.posted[0].detail
     assert len(platform.tracked) == 1
     assert not platform.notes
 

@@ -9,9 +9,11 @@ restraint the whole design:
 not by the label, which anybody can apply. A second issue for one problem is how a tracker becomes a
 place people stop looking.
 
-*A closure states its evidence.* An issue is closed only when the capability that owns the finding
-finished clean and the finding is gone from this run — the same rule a review thread is resolved by.
-Closing on absence alone would turn the first scanner outage into a week of imaginary fixes.
+*A closure states its evidence.* An issue is closed when the check that owns the finding reached a
+complete answer without it, twice in a row. Complete rules out the scanner outage that would read as
+a week of imaginary fixes; twice is because nobody reopens a closed issue to check, while a review
+thread — which the next push reopens in front of a reader — settles on the first. See
+`agent/absence.py`.
 
 *Silence when nothing is proved.* A finding whose owning check failed leaves its issue exactly as it
 was: no comment, no label change, nothing. "Still present" would be as unfounded as a closure, and a
@@ -28,13 +30,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.absence import Absences
 from agent.escalate import Escalation
 from agent.findings import Action, Finding
-from agent.reconcile import Posted, unproven
+from agent.reconcile import Posted
 from agent.scm import marker
 from agent.scm.port import Issue, NewIssue, Platform, ScmError
 from agent.unlock import Approval, held, read, render, stamped
-from agent.verdict import Judged, TaskOutcome, Verdict
+from agent.verdict import Judged, Verdict
 
 LABEL = "agent"
 """One label for everything the agent tracks, so a team can find, query or mute the whole set."""
@@ -65,7 +68,7 @@ def track_findings(
     platform: Platform,
     *,
     verdict: Verdict,
-    outcomes: tuple[TaskOutcome, ...],
+    absences: Absences,
     head: str,
     limit: int,
     escalations: tuple[Escalation, ...] = (),
@@ -79,6 +82,10 @@ def track_findings(
     analysis is already paid for, and losing its verdict because an issue could not be edited would
     make the run less reliable than the tracker it writes to.
 
+    `absences` carries what earlier runs saw and is left holding what this one should remember. It
+    is asked about every tracked key, the ones that came back included: a streak a reappearance does
+    not clear is a streak that eventually closes an issue about a live problem.
+
     `known` is the open set when the run already read it — a run that plans fixes has to, because
     which holds a person released decides what it may ship. Listing it twice would ask the platform
     the same question either side of the work and let the two answers differ.
@@ -89,7 +96,7 @@ def track_findings(
             platform,
             record,
             verdict,
-            outcomes,
+            absences,
             head,
             limit,
             escalations,
@@ -106,7 +113,7 @@ def _track(
     platform: Platform,
     record: Tracking,
     verdict: Verdict,
-    outcomes: tuple[TaskOutcome, ...],
+    absences: Absences,
     head: str,
     limit: int,
     escalations: tuple[Escalation, ...],
@@ -151,10 +158,13 @@ def _track(
         else:
             record.posted.append(Posted("unchanged", key))
 
+    for key in sorted(existing.keys() & wanted.keys()):
+        absences.reported(key)
+
     for key, issue in sorted(existing.items()):
         if key in wanted:
             continue
-        reason = unproven(key, outcomes)
+        reason = absences.settled(key)
         if reason is not None:
             record.posted.append(Posted("kept-open", key, reason))
             continue

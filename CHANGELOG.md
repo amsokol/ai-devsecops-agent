@@ -112,6 +112,17 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   an action's publish date comes from the platform API with the tag-without-a-release case covered, the
   image registry hosts are named rather than described, and the contract says what an absent target
   means — a pin with nowhere to move is reported, not fixed.
+- An issue closes when the check that owns the finding reached a complete answer without it, twice in
+  a row, instead of only when that check came back completely clean. The strict reading froze the
+  tracker: while one pin in an ecosystem was outdated, no issue of that ecosystem could ever close,
+  including ones somebody had already fixed. A live maintenance run kept four issues open for exactly
+  that reason, and a weekly run of a repository that always has something outdated would keep them
+  open forever. Twice, because nobody reopens a closed issue to check it — the streak is per finding
+  and lives beside the failure streaks in the state ref, and a finding that is reported again starts
+  over. Two exceptions close on the first answer: an issue about a check that keeps failing, where a
+  completed run is the thing itself rather than an absence, and an issue somebody just wrote on, where
+  a person is reading the reply and "come back next week" is the wrong one. A review thread also
+  settles on the first answer, since the next push reopens it in front of the reader.
 - Every place the agent writes resolves a relative path against the repository it is working on, the
   run record included, and `git worktree add` is given an absolute path regardless. It had two rules:
   the caches followed the repository and `--run-dir` followed whoever typed the command. In CI those

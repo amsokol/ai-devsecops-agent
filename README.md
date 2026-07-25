@@ -108,7 +108,7 @@ Three kinds of persistence, separate because losing each one means something dif
 | run record: manifest and evidence | `--run-dir`, published as a CI artefact | every run |
 | cache of immutable facts | `.agent/cache`, a directory a CI cache can restore and save | only a run on the default branch |
 | what a verification command downloads | `.agent/tools`: the crate registry, the module cache, wheels | any run that verifies a fix |
-| agent state: which checks keep failing | the git ref named in `agent/config/storage.yaml` | only a scheduled run, and only when it changed |
+| agent state: which checks keep failing, and how long each tracked finding has gone unreported | the git ref named in `agent/config/storage.yaml` | any maintenance run, and only when it changed |
 
 Every one of those paths, `--run-dir` included, is read relative to the repository being worked on when
 it is not absolute. One rule, because git has the same one: a relative worktree path is resolved from
@@ -396,9 +396,21 @@ same reconciliation by finding key that a review's threads get:
 | --- | --- |
 | the finding is still there, unchanged | nothing at all — no comment, no edit |
 | the finding is still there, reworded | its existing issue is brought up to date |
-| the finding is gone and its capability finished `clean` | the issue is closed, with a comment naming what looked and where |
-| the finding is gone but its capability failed | the issue is left exactly as it was, silently |
+| the finding is gone, its check finished, first time | the issue is left open and the record says why |
+| the finding is gone, its check finished, again | the issue is closed, with a comment naming what looked and where |
+| the finding is gone but its check did not finish | the issue is left exactly as it was, silently |
 | the issue has no marker | it belongs to a human, label or not |
+
+Finished means the check reached a complete answer, which `findings` is as much as `clean`: a check
+that listed four problems has said what it found, and a fifth is not on the list. Requiring `clean`
+froze the tracker instead — while one pin in an ecosystem was outdated, nothing in that ecosystem could
+close, fixed or not.
+
+Twice, because nobody reopens a closed issue to check it, and a task is asked to be exhaustive rather
+than proved to be. The count is per finding, lives in the state ref, and resets the moment the finding
+is reported again. Two things close on the first answer: an issue about a *check* that keeps failing,
+where a completed run is the thing itself and not an absence, and an issue somebody has just written
+on, where a person is reading the reply.
 
 The last two rows are the ones that matter in practice. "Still present" on an issue whose check failed
 would be as unfounded as closing it, and a weekly reminder that nothing is known is what teaches a team
