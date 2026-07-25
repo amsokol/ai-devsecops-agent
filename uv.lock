@@ -30,7 +30,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cursor-sdk", marker = "extra == 'cursor'", specifier = ">=1.0.24" },
+    { name = "cursor-sdk", marker = "extra == 'cursor'", specifier = "==1.0.24" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
 provides-extras = ["cursor"]

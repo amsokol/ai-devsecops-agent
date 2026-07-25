@@ -25,7 +25,9 @@ jobs:
         run: pipx install uv==0.11.29
 
       - name: Sync dependencies
-        run: uv sync --frozen
+        # The cursor extra is for typing the adapter against the real SDK. Runtime still treats it
+        # as optional: select.py refuses to start that backend when the package is absent.
+        run: uv sync --frozen --extra cursor
 
       - name: Ruff
         run: |

@@ -12,8 +12,10 @@ dependencies = [
 agent = "agent.cli:main"
 
 [project.optional-dependencies]
+# Optional at runtime: a product that never uses the Cursor backend should not download it. CI and
+# local type-checking install the extra so the adapter is checked against the real SDK.
 cursor = [
-    "cursor-sdk>=1.0.24",
+    "cursor-sdk==1.0.24",
 ]
 
 [build-system]
@@ -55,6 +57,13 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RET", "PTH", "C4", "RUF", "S"]
 python_version = "3.14"
 files = ["agent", "tests"]
 strict = true
+
+[[tool.mypy.overrides]]
+# The SDK is an optional extra. Without this, `uv sync` (no extras) makes mypy fail on the adapter
+# file even though the import is only reached when the extra is installed. When the package is
+# present, mypy uses its real types; the override only covers the missing-module case.
+module = ["cursor_sdk", "cursor_sdk.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
