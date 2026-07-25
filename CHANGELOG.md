@@ -107,10 +107,19 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   publishing never went through the ceiling. `hub.docker.com`, `registry-1.docker.io`, `auth.docker.io`
   and `ghcr.io` are permitted, because the library now names them and a host nobody names is a host
   nobody grants — container image facts were unobtainable while the profile called them reproducible.
-- The pinned knowledge library is `0.4.5`: acquisition recipes no longer send a session to a command
-  that has to log in, an action's publish date comes from the platform API with the tag-without-a-release
-  case covered, the image registry hosts are named rather than described, and the contract says what an
-  absent target means — a pin with nowhere to move is reported, not fixed.
+- The pinned knowledge library is `0.5.0`, contract version 2: a finding about a package names its kind
+  from a closed vocabulary, acquisition recipes no longer send a session to a command that has to log in,
+  an action's publish date comes from the platform API with the tag-without-a-release case covered, the
+  image registry hosts are named rather than described, and the contract says what an absent target
+  means — a pin with nowhere to move is reported, not fixed.
+- A finding about a package identifies itself by what is wrong — `quarantine`, `floating`, `outdated`,
+  `bundle`, `vulnerable` — instead of by a slug of its summary. The summary is prose a model writes
+  afresh every run, and the second live maintenance run proved what that costs: all four findings were
+  rephrased, every key moved, and four issues appeared beside the four already describing the same
+  problems. One of the old ones held an approval a person had given for a change that waits for one; it
+  matched nothing afterwards, and the agent asked them again. A key that moves does not just duplicate,
+  it forgets. One pin can still be two findings under two kinds, so stability did not become coarseness,
+  and a result that names no kind or an unknown one is sent back with the vocabulary.
 - A finding about a package that names no version to move to is reported and not queued for a fix.
   Quarantine produces one every week: the newest release is real, it is worth reporting, and there is
   nothing to move to until the clock runs out. The first live maintenance run queued one anyway, and

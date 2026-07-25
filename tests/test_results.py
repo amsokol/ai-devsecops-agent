@@ -25,6 +25,7 @@ def finding(**overrides: Any) -> dict[str, Any]:
         "rationale": "The advisory covers the version pinned in uv.lock.",
         "evidence": [KEY],
         "advisory": "GHSA-xxxx",
+        "kind": "vulnerable",
     }
     return base | overrides
 
@@ -52,6 +53,26 @@ def test_a_well_formed_result_is_read(tmp_path: Path) -> None:
     assert only.severity is Severity.HIGH
     assert only.capability == CAPABILITY
     assert only.key == "capabilities/deps-vuln:ecosystems/python-uv:httpx:GHSA-xxxx"
+
+
+def test_a_finding_about_a_package_must_name_its_kind(tmp_path: Path) -> None:
+    """Sent back with the words it may use, because the key is built from this one."""
+    without = finding()
+    del without["kind"]
+    path = write(tmp_path / "r.json", {"outcome": "findings", "findings": [without]})
+
+    with pytest.raises(InvalidResult, match="must name its kind"):
+        read(path)
+
+
+def test_a_kind_outside_the_vocabulary_is_refused(tmp_path: Path) -> None:
+    path = write(
+        tmp_path / "r.json",
+        {"outcome": "findings", "findings": [finding(kind="looks-a-bit-old")]},
+    )
+
+    with pytest.raises(InvalidResult, match="is not one of"):
+        read(path)
 
 
 def test_a_missing_file_is_a_failure_not_an_empty_result(tmp_path: Path) -> None:

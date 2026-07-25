@@ -46,6 +46,33 @@ class Action(StrEnum):
     COMMENT = "comment"
 
 
+class Kind(StrEnum):
+    """What is wrong with a pin, in words that do not change when the sentence does.
+
+    The key of a dependency finding needs something to tell two problems about one package apart,
+    and until this existed that something was a slug of the summary. A summary is written by a model
+    every run: the second live maintenance run rephrased all four of its findings, every key moved,
+    and four issues were raised beside the four that already described the same problems. Worse
+    quietly, a hold that a person had approved on one of those issues no longer matched anything, so
+    the agent asked for the approval again.
+
+    Closed on purpose, and small. A vocabulary with an "other" in it is a summary slug wearing a
+    different name; when a capability finds something none of these describe, this list is what
+    should grow, in a release somebody decided on.
+    """
+
+    QUARANTINE = "quarantine"
+    """The version in use, or the one a reference resolves to, is inside the quarantine window."""
+    FLOATING = "floating"
+    """The reference is not a concrete version: a branch, a channel, a rolling tag."""
+    OUTDATED = "outdated"
+    """A newer version exists and has cleared quarantine."""
+    BUNDLE = "bundle"
+    """Members that must move together are at versions that do not agree."""
+    VULNERABLE = "vulnerable"
+    """An advisory covers what is pinned. The advisory identifier keys it; this says why."""
+
+
 _SLUG = re.compile(r"[^a-z0-9]+")
 
 
@@ -91,6 +118,8 @@ class Finding:
     A declaration, not a decision. What it causes is in `agent/unlock.py`, and the agent adds the
     same hold where it can prove one, so a task that forgets to declare a major move does not turn
     policy off."""
+    kind: Kind | None = None
+    """What is wrong, from a closed vocabulary, for a finding about a package. Part of the key."""
 
     @property
     def key(self) -> str:
@@ -98,11 +127,16 @@ class Finding:
 
         A version, a line number or a scanner's wording change between runs while the problem stays
         the same, and a key that moves turns one problem into a stream of duplicate comments.
+
+        For a package that is the advisory when there is one and `kind` otherwise, both of which
+        outlive a rewording. The summary is the fallback only for a finding that has neither, and it
+        is a poor one: the second live maintenance run rephrased four summaries and raised four
+        duplicate issues, one of them discarding an approval a person had already given.
         """
         parts = [self.capability]
         if self.subject.ecosystem:
             parts += [self.subject.ecosystem, self.subject.package or ""]
-            parts.append(self.advisory or slug(self.summary))
+            parts.append(self.advisory or (self.kind.value if self.kind else slug(self.summary)))
         else:
             parts += [self.subject.path or "", slug(self.summary)]
             if self.symbol:
@@ -142,6 +176,7 @@ class Finding:
             "forbidden_state": self.forbidden_state,
             "target": self.target,
             "needs_unlock": self.needs_unlock,
+            "kind": self.kind.value if self.kind else "",
         }
 
 

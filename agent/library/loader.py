@@ -17,7 +17,10 @@ import yaml
 
 from agent.errors import ConfigError
 
-SUPPORTED_CONTRACT_VERSIONS = frozenset({1})
+SUPPORTED_CONTRACT_VERSIONS = frozenset({2})
+"""Which result contracts this agent can read. A set rather than a number so one agent can serve two
+library versions through a migration. Nothing is pinned to `1` any more, and accepting a contract
+this validator does not enforce would be worse than refusing it."""
 
 # Kinds a task's knowledge slice may grow into by following links. See `Library.closure`.
 FOLLOWED_KINDS = frozenset({"policy", "scm"})
