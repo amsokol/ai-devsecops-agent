@@ -46,12 +46,19 @@ class Session:
         self._never_send = never_send
         self._scratch_root = scratch_root
 
-    def for_task(self, task_id: str) -> TaskTools:
+    def for_task(self, task_id: str, *, root: Path | None = None) -> TaskTools:
+        """The tools for one task, reading and writing inside `root`.
+
+        `root` is the repository for analysis and the task's own worktree for a fix. Everything is
+        derived from it — file access, the working directory for commands — so a fix task cannot
+        reach the tree under review even by accident, and the never-send list applies in both.
+        """
         scratch = self._scratch_root / task_id
         scratch.mkdir(parents=True, exist_ok=True)
+        tree = root or self.repository
         return TaskTools(
-            files=FileTools(root=self.repository, never_send=self._never_send),
-            commands=CommandRunner(grants=self.grants, workdir=self.repository, scratch=scratch),
+            files=FileTools(root=tree, never_send=self._never_send),
+            commands=CommandRunner(grants=self.grants, workdir=tree, scratch=scratch),
             http=HttpClient(grants=self.grants),
             scratch=scratch,
         )

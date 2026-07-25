@@ -23,6 +23,10 @@ class Withheld(Exception):
     """The path is on the never-send list. Its contents do not leave the run."""
 
 
+class NotEdited(Exception):
+    """The edit was not applied, and the file is unchanged. Never a partial write."""
+
+
 @dataclass(frozen=True, slots=True)
 class Match:
     path: str
@@ -59,6 +63,46 @@ class FileTools:
         if len(data) > limit:
             return text[:limit] + "\n… truncated, file is larger than the read limit\n"
         return text
+
+    def edit_file(self, relative: str, *, find: str, replace: str) -> int:
+        """Replace an exact fragment, and only when it occurs exactly once.
+
+        Deliberately not a whole-file write. A fix should be the smallest change that removes the
+        problem, and a tool that rewrites a file lets a model quietly reformat, drop a comment or
+        lose a line it never read. Ambiguity is refused rather than resolved by position: `find`
+        matching twice means the caller does not know which one it is changing.
+
+        Returns the line number where the replacement starts, so the caller can say where it edited.
+        """
+        if self.withheld(relative):
+            # The contents were never shown to the model, so an edit here would be a change made
+            # blind — and this is exactly the class of file where that is unacceptable.
+            raise Withheld(f"{relative!r} is on the never-send list")
+        if not find:
+            raise NotEdited(
+                f"{relative}: an edit needs the exact text to replace. There is no whole-file "
+                "write: read the file, then replace the fragment you mean to change"
+            )
+        path = self.resolve(relative)
+        if not path.is_file():
+            raise NotEdited(f"{relative} does not exist in this tree")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise NotEdited(f"{relative}: {error}") from None
+        occurrences = text.count(find)
+        if occurrences == 0:
+            raise NotEdited(
+                f"{relative} does not contain that text exactly. Read the file again and copy the "
+                "fragment from what you read, including its indentation"
+            )
+        if occurrences > 1:
+            raise NotEdited(
+                f"{relative} contains that text {occurrences} times, so it does not say which one "
+                "to change. Include enough surrounding lines to make it unique"
+            )
+        path.write_text(text.replace(find, replace, 1), encoding="utf-8")
+        return text[: text.index(find)].count("\n") + 1
 
     def list_files(self, pattern: str = "**/*") -> tuple[str, ...]:
         return tuple(

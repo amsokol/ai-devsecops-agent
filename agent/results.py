@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent.domain import Outcome, Reason
+from agent.domain import FixOutcome, Outcome, Reason
 from agent.evidence import Subject
 from agent.findings import Finding, Klass, Location, Severity
 
@@ -25,6 +25,7 @@ STATEABLE_REASONS = frozenset(
     {Reason.NO_TOOLING, Reason.UNAVAILABLE, Reason.UNEXPECTED_SHAPE, Reason.NOT_PERMITTED}
 )
 _RESULT_KEYS = frozenset({"outcome", "reason", "findings", "notes"})
+_FIX_KEYS = frozenset({"outcome", "reason", "notes"})
 _FINDING_KEYS = frozenset(
     {
         "capability",
@@ -74,19 +75,7 @@ def read_result(
     mean the same thing across runs, and it cannot if one run spells the ecosystem `python-uv` and
     the next spells it `ecosystems/python-uv`.
     """
-    if not path.is_file():
-        raise InvalidResult(f"{path} was not written")
-    try:
-        raw: Any = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise InvalidResult(f"{path}: {error}") from None
-    if not isinstance(raw, dict):
-        raise InvalidResult(f"{path}: expected an object at the top level")
-
-    unknown = sorted(raw.keys() - _RESULT_KEYS)
-    if unknown:
-        raise InvalidResult(f"{path}: unknown field(s) {', '.join(unknown)}")
-
+    raw = _document(path, keys=_RESULT_KEYS)
     outcome = _enum(Outcome, raw.get("outcome"), path=path, field_name="outcome")
     reason = (
         _enum(Reason, raw["reason"], path=path, field_name="reason")
@@ -126,6 +115,64 @@ def read_result(
         reason=reason,
         notes=str(raw.get("notes") or "").strip(),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class FixResult:
+    """What a fix task claims. Everything factual about the change is read from the tree instead."""
+
+    outcome: FixOutcome
+    notes: str
+    reason: Reason | None = None
+
+
+def read_fix_result(path: Path) -> FixResult:
+    """Parse and validate one fix task's result file.
+
+    Deliberately small. A fix task's claims are prose for a human — what was changed, or why not —
+    while the facts come from elsewhere: which files differ is read from the worktree, and whether
+    verification ran is matched against the run's own record of executed commands. Asking the model
+    to declare those too would only create a second version of them to disagree with the first.
+    """
+    raw = _document(path, keys=_FIX_KEYS)
+    outcome = _enum(FixOutcome, raw.get("outcome"), path=path, field_name="outcome")
+    reason = (
+        _enum(Reason, raw["reason"], path=path, field_name="reason")
+        if raw.get("reason") is not None
+        else None
+    )
+    if reason is not None and reason not in STATEABLE_REASONS:
+        allowed = ", ".join(sorted(item.value for item in STATEABLE_REASONS))
+        raise InvalidResult(
+            f"{path}: reason {reason.value!r} is not one a task may state ({allowed})"
+        )
+    if outcome is FixOutcome.UNVERIFIED and reason is None:
+        raise InvalidResult(f"{path}: outcome 'unverified' requires a reason")
+    if outcome is FixOutcome.EXHAUSTED:
+        reason = Reason.EXHAUSTED
+    notes = str(raw.get("notes") or "").strip()
+    if outcome in {FixOutcome.FIXED, FixOutcome.REFUSED} and not notes:
+        # A branch with no explanation, or a refusal with no reason, both leave a human to
+        # reconstruct the session's reasoning from a diff. That was this task's job.
+        raise InvalidResult(
+            f"{path}: outcome {outcome.value!r} requires notes — what you changed, or why not"
+        )
+    return FixResult(outcome=outcome, notes=notes, reason=reason)
+
+
+def _document(path: Path, *, keys: frozenset[str]) -> dict[str, Any]:
+    if not path.is_file():
+        raise InvalidResult(f"{path} was not written")
+    try:
+        raw: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise InvalidResult(f"{path}: {error}") from None
+    if not isinstance(raw, dict):
+        raise InvalidResult(f"{path}: expected an object at the top level")
+    unknown = sorted(raw.keys() - keys)
+    if unknown:
+        raise InvalidResult(f"{path}: unknown field(s) {', '.join(unknown)}")
+    return raw
 
 
 def _finding(
@@ -200,7 +247,7 @@ def _location(raw: Any, *, where: str) -> Location | None:
     return Location(path=str(raw["path"]), line=int(line) if line is not None else None)
 
 
-def _enum[T: (Outcome, Reason, Klass, Severity)](
+def _enum[T: (Outcome, FixOutcome, Reason, Klass, Severity)](
     kind: type[T], value: Any, *, path: Path, field_name: str
 ) -> T:
     if value is None:

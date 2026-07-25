@@ -87,6 +87,11 @@ class Manifest:
     """The limits this run was given and what it spent, so an `exhausted` task is explainable."""
     roles: list[dict[str, str]] = field(default_factory=list)
     """Which backend and model each role the plan needed, checked before anything was spent."""
+    fixes: list[dict[str, Any]] = field(default_factory=list)
+    """What each fix task did, including the ones that refused: a branch that was not created is as
+    much a part of the record as one that was."""
+    remediation: dict[str, Any] = field(default_factory=dict)
+    """The fix queue: what this run attempted, and what it left for the next one and why."""
     models: list[dict[str, Any]] = field(default_factory=list)
     tool_versions: dict[str, str] = field(default_factory=dict)
     cost: dict[str, Any] = field(
@@ -170,6 +175,8 @@ class Manifest:
             "policy": self.policy,
             "budget": self.budget,
             "roles": self.roles,
+            "fixes": self.fixes,
+            "remediation": self.remediation,
             "models": self.models,
             "tool_versions": self.tool_versions,
             "cost": self.cost,

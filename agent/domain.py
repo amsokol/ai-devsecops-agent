@@ -44,6 +44,24 @@ class Outcome(StrEnum):
     EXHAUSTED = "exhausted"
 
 
+class FixOutcome(StrEnum):
+    """How a fix task ended. A separate vocabulary because it answers a different question.
+
+    An analysis task says what is true about the code; a fix task says whether a change was made and
+    proved safe. Refusing is a correct answer here: a branch that ships on a hope costs more than
+    one that never appeared, because the next person has to establish whether it is safe anyway.
+    """
+
+    FIXED = "fixed"
+    REFUSED = "refused"
+    UNVERIFIED = "unverified"
+    EXHAUSTED = "exhausted"
+
+    @property
+    def shipped(self) -> bool:
+        return self is FixOutcome.FIXED
+
+
 class Reason(StrEnum):
     """Why a fact could not be established.
 

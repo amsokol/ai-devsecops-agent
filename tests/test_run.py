@@ -110,6 +110,23 @@ def test_a_review_whose_tasks_all_report_clean_passes(
     assert "capabilities/code-vuln" in prompt
 
 
+def test_a_maintenance_run_carries_a_fix_phase_even_when_there_is_nothing_to_fix(
+    git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
+) -> None:
+    """A clean branch still records the queue: an empty one is a fact, not an absence of the phase.
+
+    It also asserts the binding check reaches `fixer` before any task starts. Discovering an unbound
+    fixer after the analysis would mean a run that reports findings and ships nothing.
+    """
+    run_dir = tmp_path / "runs"
+    code = main(["maintain", *arguments(git_repo, library_root, overlay_root, run_dir, config_dir)])
+    assert code == int(ExitCode.OK)
+    manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
+    assert [role["role"] for role in manifest["roles"]] == ["analyst", "fixer"]
+    assert manifest["remediation"] == {"jobs": [], "deferred": []}
+    assert manifest["fixes"] == []
+
+
 def test_a_broken_overlay_stops_the_run_before_any_work(
     git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
 ) -> None:

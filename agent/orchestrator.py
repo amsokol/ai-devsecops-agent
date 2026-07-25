@@ -17,9 +17,8 @@ from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import Config
-from agent.domain import Plan, Trigger
+from agent.domain import Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
-from agent.evidence import EvidenceStore
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
 from agent.library import Library
@@ -27,6 +26,7 @@ from agent.manifest import Manifest
 from agent.overlay import Overlay
 from agent.planner import ChangeSet, plan_run
 from agent.policy import BlockingRules
+from agent.remediate import Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
 from agent.session import Session
@@ -51,6 +51,8 @@ class Request:
     change: int | None = None
     wake_issue: int | None = None
     plan_only: bool = False
+    dry_run: bool = False
+    """Analyse and say what would be fixed, without creating a worktree, a branch or a commit."""
     use_cache: bool = True
     only: tuple[str, ...] = ()
     """Task identifiers to run, for development. A run so narrowed says so in its manifest and in
@@ -173,10 +175,12 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     # anything is spent: an unbound `fixer`, or one bound to an adapter that cannot change files, is
     # a mistake in a file. Found mid-run it would mean a maintenance pass that opened issues and
     # then reported it had fixed nothing.
-    manifest.roles = [
-        config.models.for_role(role).as_json()
-        for role in sorted({task.role for task in plan.tasks})
-    ]
+    # A maintenance run that is allowed to fix needs a `fixer` binding before it starts, not after
+    # the analysis it just paid for: the alternative is a pass that reports findings and silently
+    # never ships anything, which looks exactly like a week with nothing to fix.
+    may_fix = request.trigger.is_maintenance and not request.dry_run and not request.plan_only
+    needed = {task.role for task in plan.tasks} | ({Role.FIXER} if may_fix else set())
+    manifest.roles = [config.models.for_role(role).as_json() for role in sorted(needed)]
 
     # Recorded before the plan-only exit: seeing what a trigger would be allowed to spend is half
     # the reason to ask for a plan without running one.
@@ -211,7 +215,7 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     if owned:
         # Created up front, so an SDK this machine has not installed is an error before the first
         # task rather than one task's failure among several.
-        roster.prepare({task.role for task in plan.tasks})
+        roster.prepare(needed)
     # One clock for the whole run: quarantine arithmetic that moved between two tasks of the same
     # run would make the verdict depend on how long the earlier tasks took.
     toolkits = Toolkits(
@@ -223,29 +227,36 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
     # fails with a future attached to another loop.
     ledger = Ledger(RunBudget(max_parallel=limits.max_parallel, tokens=limits.run_tokens))
-    executed = asyncio.run(
-        _execute(
+    executed, verdict, fixes, queue = asyncio.run(
+        _perform(
             plan,
+            manifest=manifest,
             roster=roster,
             library=library,
-            notes=overlay.notes,
-            evidence=session.evidence,
-            tasks_dir=run_directory / "tasks",
+            overlay=overlay,
+            session=session,
+            rules=rules,
+            repository=repository,
+            run_directory=run_directory,
             budget=Budget(seconds=limits.task_seconds, steps=limits.task_steps),
             toolkits=toolkits,
             ledger=ledger,
+            may_fix=may_fix,
             close=owned,
         )
     )
     manifest.budget["spend"] = ledger.spend.as_json()
+    if queue is not None:
+        manifest.fixes = [fix.as_json() for fix in fixes]
+        manifest.remediation = queue.as_json()
 
-    verdict = _conclude(manifest, executed, rules=rules, session=session)
     report = render(
         verdict,
         trigger=request.trigger,
         tasks=tuple(item.outcome for item in executed),
         library_version=library.identity.version,
         unverified_facts=len(session.evidence.unverified()),
+        fixes=tuple(fixes),
     )
 
     manifest.cache = cache.stats.as_json() | {"writable": cache.writable}
@@ -256,31 +267,68 @@ def run(request: Request, *, backend: Backend | None = None) -> RunRecord:
     return RunRecord(manifest, manifest_path, verdict.result.exit_code, verdict, report)
 
 
-async def _execute(
+async def _perform(
     plan: Plan,
     *,
+    manifest: Manifest,
     roster: Roster,
     library: Library,
-    notes: str,
-    evidence: EvidenceStore,
-    tasks_dir: Path,
+    overlay: Overlay,
+    session: Session,
+    rules: BlockingRules,
+    repository: Repository,
+    run_directory: Path,
     budget: Budget,
     toolkits: Toolkits,
     ledger: Ledger,
+    may_fix: bool,
     close: bool,
-) -> list[Executed]:
+) -> tuple[list[Executed], Verdict, list[Fix], Queue | None]:
+    """Analyse, decide, and then — on a maintenance run — fix what the decision allows.
+
+    All of it in one event loop, including the shutdown. A backend holding a subprocess cannot be
+    closed from a second loop: the process was awaited in the first one. That constraint is why the
+    deterministic decision in the middle happens here rather than between two `asyncio.run` calls.
+    """
     try:
-        return await execute(
+        executed = await execute(
             plan,
             roster=roster,
             library=library,
-            notes=notes,
-            evidence=evidence,
-            tasks_dir=tasks_dir,
+            notes=overlay.notes,
+            evidence=session.evidence,
+            tasks_dir=run_directory / "tasks",
             budget=budget,
             toolkits=toolkits,
             ledger=ledger,
         )
+        verdict = _conclude(manifest, executed, rules=rules, session=session)
+        if not may_fix:
+            return executed, verdict, [], None
+        queue = plan_fixes(
+            verdict.judged,
+            library=library,
+            overlay=overlay,
+            playbook=plan.playbook,
+            repository=repository,
+            open_change_requests=overlay.limits.open_change_requests,
+        )
+        fixes = await apply(
+            queue,
+            repository=repository,
+            roster=roster,
+            library=library,
+            notes=overlay.notes,
+            surfaces=overlay.verification,
+            trees_dir=run_directory / "fixes",
+            tasks_dir=run_directory / "tasks",
+            budget=budget,
+            toolkits=toolkits,
+            ledger=ledger,
+            run=manifest.run_id,
+        )
+        _account(manifest, fixes)
+        return executed, verdict, fixes, queue
     finally:
         if close:
             await roster.close()
@@ -316,6 +364,22 @@ def _conclude(
     manifest.evidence = [record.as_json() for record in session.evidence]
     manifest.cost = _cost(manifest.models)
     return verdict
+
+
+def _account(manifest: Manifest, fixes: list[Fix]) -> None:
+    """Put the fix sessions on the same books as the analysis ones.
+
+    The first live run of this phase reported one accounted session and 2.5M tokens in `cost` while
+    the ledger, which counts everything it is asked to admit, had four and 7.4M. A cost figure that
+    leaves out the most expensive half of the run is worse than none: it is a number a team would
+    plan a budget with.
+    """
+    for fix in fixes:
+        for attempt in fix.attempts:
+            manifest.models.append(
+                {"task": fix.job.task.id, "attempt": attempt.number} | attempt.session.as_json()
+            )
+    manifest.cost = _cost(manifest.models)
 
 
 def _cost(models: list[dict[str, object]]) -> dict[str, object]:

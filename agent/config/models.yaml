@@ -15,11 +15,15 @@ roles:
     backend: cursor
     model: composer-2.5
 
-  # No fixer binding yet: the Cursor adapter gives a session its own task directory and never the
-  # repository, so it cannot change a tree. Adding one here today is a startup error rather than a
-  # maintenance run that silently fixes nothing.
+  # Fixing is the same kind of work as analysing, on the same pair, and the eval harness is what will
+  # tell us whether it should be a different one. A maintenance run allowed to fix refuses to start
+  # without this binding: a run that reports findings and silently ships nothing looks exactly like a
+  # week with nothing to fix.
+  fixer:
+    backend: cursor
+    model: composer-2.5
 
-  # No intent binding yet either — waking on a human comment arrives with that role.
+  # No intent binding yet — waking on a human comment arrives with that role.
 
   # writer stays off: the report's text is written by the analyst that found the thing. A second
   # session per run costs money and adds a place where the prose and the findings disagree. It is

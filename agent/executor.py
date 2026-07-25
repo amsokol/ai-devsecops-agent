@@ -8,6 +8,7 @@ switched off by anyone who can break a tool or exhaust a budget.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -151,33 +152,40 @@ async def _execute_one(
         executed.calls = toolkit.as_json()
 
 
-async def _attempts(
+@dataclass(slots=True)
+class Attempted[T]:
+    """The sessions one task took, and what came out of the last of them."""
+
+    attempts: list[Attempt] = field(default_factory=list)
+    parsed: T | None = None
+    failure: Failure | None = None
+    rejected: str = ""
+    """Why the last result file was refused, when no valid one arrived."""
+
+
+async def run_attempts[T](
     task: PlannedTask,
     *,
-    executed: Executed,
     roster: Roster,
-    instructions: str,
-    knowledge: tuple[tuple[str, str], ...],
-    notes: str,
-    evidence: EvidenceStore,
     tasks_dir: Path,
     budget: Budget,
     toolkit: Toolkit,
-    rejection: str,
-) -> Executed:
+    prompt_for: Callable[[int, str, Path], str],
+    parse: Callable[[Path], T],
+) -> Attempted[T]:
+    """Run one task until it produces a valid result, or until the one retry is used up.
+
+    Shared by analysis and by fixing, because the retry rule is contract behaviour rather than a
+    detail of either: one more attempt when the result file was refused or the session never
+    started, and then an honest failure. Two copies of this loop would eventually disagree about how
+    many attempts a task gets, and the manifest would stop meaning the same thing between kinds.
+    """
+    attempted: Attempted[T] = Attempted()
+    rejection = ""
     for number in range(1, MAX_ATTEMPTS + 1):
         directory = tasks_dir / task.id / f"attempt-{number}"
         result_path = directory / "result.json"
-        prompt = compose(
-            task=task,
-            instructions=instructions,
-            knowledge=knowledge,
-            notes=notes,
-            result_path=result_path,
-            tools=tuple((tool.name, tool.description) for tool in toolkit.tools()),
-            attempt=number,
-            invalid_reason=rejection,
-        )
+        prompt = prompt_for(number, rejection, result_path)
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "prompt.md").write_text(prompt, encoding="utf-8")
 
@@ -195,42 +203,87 @@ async def _attempts(
         attempt = Attempt(
             number=number, session=session, prompt_digest=digest(prompt), result_path=result_path
         )
-        executed.attempts.append(attempt)
+        attempted.attempts.append(attempt)
 
         if session.failure is not None:
-            executed.outcome = _from_failure(task, session.failure)
+            attempted.failure = session.failure
             if session.failure is Failure.NOT_STARTED and number < MAX_ATTEMPTS:
                 # Nothing was spent and nothing was decided: a session that never started is an
                 # environment problem, and one more attempt is cheaper than an inconclusive run.
                 rejection = f"the previous session did not start: {session.detail}"
                 continue
-            return executed
+            return attempted
 
         try:
-            result = read_result(
-                result_path,
-                capability=task.capability,
-                known_evidence=evidence.keys(),
-                ecosystem=task.ecosystem,
-            )
+            attempted.parsed = parse(result_path)
         except InvalidResult as error:
             attempt.rejected = str(error)
             rejection = str(error)
+            attempted.rejected = str(error)
             if number < MAX_ATTEMPTS:
                 continue
-            executed.outcome = _unverified(task, Reason.INVALID_RESULT)
-            return executed
+            return attempted
+        attempted.failure = None
+        attempted.rejected = ""
+        return attempted
 
-        executed.result = result
+    return attempted
+
+
+async def _attempts(
+    task: PlannedTask,
+    *,
+    executed: Executed,
+    roster: Roster,
+    instructions: str,
+    knowledge: tuple[tuple[str, str], ...],
+    notes: str,
+    evidence: EvidenceStore,
+    tasks_dir: Path,
+    budget: Budget,
+    toolkit: Toolkit,
+    rejection: str,
+) -> Executed:
+    def prompt_for(number: int, refused: str, result_path: Path) -> str:
+        return compose(
+            task=task,
+            instructions=instructions,
+            knowledge=knowledge,
+            notes=notes,
+            result_path=result_path,
+            tools=tuple((tool.name, tool.description) for tool in toolkit.tools()),
+            attempt=number,
+            invalid_reason=refused or rejection,
+        )
+
+    attempted = await run_attempts(
+        task,
+        roster=roster,
+        tasks_dir=tasks_dir,
+        budget=budget,
+        toolkit=toolkit,
+        prompt_for=prompt_for,
+        parse=lambda path: read_result(
+            path,
+            capability=task.capability,
+            known_evidence=evidence.keys(),
+            ecosystem=task.ecosystem,
+        ),
+    )
+    executed.attempts = attempted.attempts
+    if attempted.parsed is not None:
+        executed.result = attempted.parsed
         executed.outcome = TaskOutcome(
             id=task.id,
             capability=task.capability,
             required=task.required,
-            outcome=result.outcome,
-            reason=result.reason,
+            outcome=attempted.parsed.outcome,
+            reason=attempted.parsed.reason,
         )
-        return executed
-
+    elif attempted.failure is not None:
+        executed.outcome = _from_failure(task, attempted.failure)
+    else:
+        executed.outcome = _unverified(task, Reason.INVALID_RESULT)
     return executed
 
 

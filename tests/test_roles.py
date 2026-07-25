@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from agent.backends import FakeBackend
-from agent.backends.abilities import ABILITIES, CURSOR
+from agent.backends.abilities import ABILITIES, CURSOR, Abilities
 from agent.backends.select import Roster
 from agent.config import BUILTIN_CONFIG_DIR, Config
 from agent.domain import Role
@@ -22,10 +22,13 @@ def config_with(models: str, tmp_path: Path) -> Config:
     return Config.load(directory)
 
 
-def test_the_shipped_configuration_binds_the_analyst_and_nothing_it_cannot_run() -> None:
+def test_the_shipped_configuration_binds_every_role_a_run_reaches() -> None:
     """What a release enforces, asserted without a --config-dir standing in for it."""
     models = Config.load().models
     assert models.for_role(Role.ANALYST).backend == "cursor"
+    # A maintenance run refuses to start without this one, so its absence would be a release that
+    # cannot maintain anything.
+    assert models.for_role(Role.FIXER).backend == "cursor"
     for binding in models.bindings.values():
         abilities = ABILITIES[binding.backend]
         assert not abilities.missing(NEEDS[binding.role])
@@ -37,13 +40,31 @@ def test_every_declared_ability_is_one_a_role_or_an_eval_can_ask_about() -> None
         assert abilities.has <= set(Ability)
 
 
-def test_a_fixer_on_a_backend_that_cannot_write_is_refused_at_startup(tmp_path: Path) -> None:
-    """The point of the check: a maintenance run that opens issues and then changes nothing."""
-    assert Ability.WRITES not in CURSOR.has
+def test_a_role_on_a_backend_that_cannot_do_its_work_is_refused_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the check: a run that spends its budget before discovering the mismatch.
+
+    No shipped adapter is missing `tools` today, so the incompatible backend is introduced here. The
+    check is worth proving anyway: it is what stands between a typo in `models.yaml` and a
+    maintenance run that reports findings and silently ships nothing.
+    """
+    toolless = Abilities(name="toolless", has=frozenset({Ability.TOKEN_ACCOUNTING}))
+    monkeypatch.setitem(ABILITIES, toolless.name, toolless)
     with pytest.raises(ConfigError) as error:
-        config_with("roles:\n  fixer:\n    backend: cursor\n    model: composer-2.5\n", tmp_path)
-    assert "writes" in str(error.value)
+        config_with("roles:\n  fixer:\n    backend: toolless\n    model: none\n", tmp_path)
+    assert "tools" in str(error.value)
     assert "fixer" in str(error.value)
+
+
+def test_mutation_is_a_tool_of_ours_rather_than_an_ability_of_a_backend() -> None:
+    """A `fixer` needs the registry and nothing more, because `edit_file` lives in the registry.
+
+    Declaring a `writes` ability per adapter looked like a real gate and was not: every backend that
+    can expose our tools can expose the one that edits a worktree.
+    """
+    assert NEEDS[Role.FIXER] == frozenset({Ability.TOOLS})
+    assert not CURSOR.missing(NEEDS[Role.FIXER])
 
 
 def test_an_unknown_role_or_backend_is_a_startup_error(tmp_path: Path) -> None:

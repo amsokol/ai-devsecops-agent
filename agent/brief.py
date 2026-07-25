@@ -77,6 +77,27 @@ Rules the validator enforces:
 * no other fields are allowed anywhere in the file."""
 
 
+FIX_RESULT_SHAPE = """\
+```json
+{
+  "outcome": "fixed | refused | unverified | exhausted",
+  "reason": "no-tooling | unavailable | unexpected-shape | not-permitted",
+  "notes": "what you changed, or why you did not; a human reads this next to the diff"
+}
+```
+
+Rules the validator enforces:
+
+* `notes` is required for `fixed` and for `refused`. For a fix it is what the change request will
+  say; for a refusal it is the reason, and "it did not work" is not one.
+* `reason` is required when `outcome` is `unverified`, and only those four values are accepted. Use
+  `unverified` when you could not establish what you needed to even attempt the fix.
+* `exhausted` is for a budget that ran out first — a step limit or the clock. It needs no reason.
+* there is no field for what you changed or what you ran. The agent reads the first from the tree
+  and the second from the record of your calls, so a list here would be a second version of them.
+* no other fields are allowed."""
+
+
 def role_instructions(role: Role) -> str:
     path = PROMPTS_DIR / f"{role.value}.md"
     if not path.is_file():
@@ -101,12 +122,15 @@ def compose(
     tools: tuple[tuple[str, str], ...] = (),
     attempt: int = 1,
     invalid_reason: str = "",
+    shape: str = RESULT_SHAPE,
+    given: tuple[str, ...] = (),
 ) -> str:
     """The full message for one task. Deterministic: same inputs, same bytes."""
     parts = [instructions, "", "## Your task", ""]
     parts.append(f"- Capability: `{task.capability}`")
     if task.ecosystem:
         parts.append(f"- Ecosystem: `{task.ecosystem}`")
+    parts += list(given)
     if task.scope:
         listed = ", ".join(f"`{path}`" for path in task.scope)
         parts.append(f"- Files in scope: {listed}")
@@ -132,7 +156,7 @@ def compose(
         parts += [f"* `{name}` — {description}" for name, description in tools]
         parts.append("")
 
-    parts += ["### Result shape", "", RESULT_SHAPE, ""]
+    parts += ["### Result shape", "", shape, ""]
 
     if notes:
         parts += [

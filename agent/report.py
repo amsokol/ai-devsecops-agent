@@ -13,6 +13,7 @@ from __future__ import annotations
 from agent.domain import RunResult, Trigger
 from agent.evidence import Reliability
 from agent.findings import Action, Severity
+from agent.remediate import Fix
 from agent.verdict import Judged, TaskOutcome, Verdict
 
 SEVERITY_ORDER = (Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL)
@@ -31,6 +32,7 @@ def render(
     tasks: tuple[TaskOutcome, ...],
     library_version: str,
     unverified_facts: int = 0,
+    fixes: tuple[Fix, ...] = (),
 ) -> str:
     lines = [f"## {HEADLINES[verdict.result]}", ""]
 
@@ -73,6 +75,8 @@ def render(
         ]
         lines.append("")
 
+    lines += _fixes(fixes)
+
     if not verdict.judged and not verdict.failed_tasks:
         lines += ["Nothing to report.", ""]
 
@@ -82,6 +86,52 @@ def render(
         footer += f" {unverified_facts} fact(s) could not be established."
     lines.append(footer)
     return "\n".join(lines) + "\n"
+
+
+def _fixes(fixes: tuple[Fix, ...]) -> list[str]:
+    """Prepared branches, and the fixes that were deliberately not shipped.
+
+    Both halves matter. A branch is what a human acts on; a refusal is what stops them from assuming
+    the agent quietly handled it. An empty section is omitted entirely rather than announced.
+    """
+    if not fixes:
+        return []
+    lines = ["### Fixes prepared", ""]
+    for fix in sorted(fixes, key=lambda item: item.job.task.id):
+        finding = fix.job.judged.finding
+        named = finding.subject.package or finding.subject.path or finding.capability
+        if fix.outcome.shipped:
+            surfaces = ", ".join(fix.verification.verified) if fix.verification else ""
+            lines.append(f"- `{fix.branch}` — {named}: {fix.notes}")
+            if surfaces:
+                lines.append(f"  Verified: {surfaces}.")
+        else:
+            lines.append(f"- Not shipped — {named}: {fix.detail or fix.outcome.value}")
+    lines.append("")
+    return lines + _red_base(fixes)
+
+
+def _red_base(fixes: tuple[Fix, ...]) -> list[str]:
+    """Say it once, plainly, when the product's own checks were failing before any fix was tried.
+
+    Otherwise a week of refusals reads as the agent being unable to bump a dependency, and the team
+    would be debugging the wrong thing. Named per command rather than per fix: it is one problem in
+    the repository, however many fixes it stopped.
+    """
+    inherited = {
+        " ".join(command)
+        for fix in fixes
+        if fix.verification is not None
+        for command in fix.verification.pre_existing
+    }
+    if not inherited:
+        return []
+    listed = ", ".join(f"`{command}`" for command in sorted(inherited))
+    return [
+        "Some verification was already failing before any fix was attempted, so no fix on those "
+        f"surfaces could be proved safe: {listed}. Fixing that unblocks the automated ones.",
+        "",
+    ]
 
 
 def _entries(items: tuple[Judged, ...]) -> list[str]:

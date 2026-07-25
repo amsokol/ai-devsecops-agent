@@ -19,6 +19,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from agent.domain import PlannedTask, Reason
@@ -27,6 +28,7 @@ from agent.evidence import Evidence, Origin, Question, Subject
 from agent.session import Session, TaskTools
 from agent.tools import (
     HostNotPermitted,
+    NotEdited,
     NotPermitted,
     OutsideRepository,
     Withheld,
@@ -94,13 +96,16 @@ class Toolkit:
         now: datetime,
         quarantine_days: int,
         step_limit: int | None = None,
+        worktree: Path | None = None,
     ) -> None:
         self.task = task
         self.now = now
         self.quarantine_days = quarantine_days
         self.step_limit = step_limit
+        self.worktree = worktree
+        """The isolated tree a fix task edits. Absent for analysis, which changes nothing."""
         self._session = session
-        self._tools: TaskTools = session.for_task(task.id)
+        self._tools: TaskTools = session.for_task(task.id, root=worktree)
         self._calls: list[Call] = []
 
     @property
@@ -111,7 +116,38 @@ class Toolkit:
         return [call.as_json() for call in self._calls]
 
     def tools(self) -> tuple[Tool, ...]:
-        return self._always() + self._when_reviewing_a_change()
+        return self._always() + self._when_reviewing_a_change() + self._when_fixing()
+
+    def _when_fixing(self) -> tuple[Tool, ...]:
+        """Offered only to a task that was given a worktree.
+
+        There is no tool here for git or for the hosting platform, and that is the guarantee rather
+        than an omission: a branch, a commit, a push and a change request are the agent's, done once
+        after the session, from what the finding says. "Never force-push" is then a fact about which
+        tools exist, not a sentence in a prompt that a long session may drift away from.
+        """
+        if self.worktree is None:
+            return ()
+        return (
+            Tool(
+                name="edit_file",
+                description=(
+                    "Replace an exact fragment of a file in your worktree. The fragment must occur "
+                    "exactly once — include surrounding lines when it does not. There is no "
+                    "whole-file write, and nothing here stages or commits: the agent commits what "
+                    "you leave behind."
+                ),
+                schema=_schema(
+                    {
+                        "path": _string("path relative to the worktree root"),
+                        "find": _string("exact text to replace, copied from what you read"),
+                        "replace": _string("text to put in its place; empty removes the fragment"),
+                    },
+                    required=["path", "find", "replace"],
+                ),
+                run=self._edit_file,
+            ),
+        )
 
     def _when_reviewing_a_change(self) -> tuple[Tool, ...]:
         """Offered only when there is a change to compare against, so a repository-wide run cannot
@@ -401,6 +437,25 @@ class Toolkit:
             "stdout": result.stdout,
             "stderr": result.stderr,
         }
+
+    # Mutation --------------------------------------------------------------------
+
+    def _edit_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        path = _required(arguments, "path")
+        find = arguments.get("find")
+        replace = arguments.get("replace")
+        if not isinstance(find, str) or not isinstance(replace, str):
+            raise Refused("find and replace must both be strings")
+        try:
+            line = self._tools.files.edit_file(path, find=find, replace=replace)
+        except (Withheld, NotEdited, OutsideRepository) as error:
+            self._record_call("edit_file", Origin.TOOL, path, ok=False, detail=str(error))
+            raise Refused(str(error)) from None
+        except OSError as error:
+            self._record_call("edit_file", Origin.TOOL, path, ok=False, detail=str(error))
+            raise Refused(f"{path}: {error}") from None
+        call = self._record_call("edit_file", Origin.TOOL, f"{path}:{line}", ok=True)
+        return {"call": call.id, "path": path, "line": line, "applied": True}
 
     def _read_change(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = _required(arguments, "path")
@@ -771,11 +826,18 @@ class Toolkits:
     now: datetime
     quarantine_days: int
 
-    def for_task(self, task: PlannedTask, *, step_limit: int | None = None) -> Toolkit:
+    def for_task(
+        self,
+        task: PlannedTask,
+        *,
+        step_limit: int | None = None,
+        worktree: Path | None = None,
+    ) -> Toolkit:
         return Toolkit(
             session=self.session,
             task=task,
             now=self.now,
             quarantine_days=self.quarantine_days,
             step_limit=step_limit,
+            worktree=worktree,
         )

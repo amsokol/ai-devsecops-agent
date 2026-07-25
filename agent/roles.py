@@ -21,10 +21,14 @@ class Ability(StrEnum):
     """Something an adapter either implements or does not. Only stated where it is known."""
 
     TOOLS = "tools"
-    """Can expose the agent's tool registry to a session."""
+    """Can expose the agent's tool registry to a session.
 
-    WRITES = "writes"
-    """Can let a session modify files in the workspace it was given."""
+    This is what a `fixer` needs to change files, too. Mutation is one of our tools — `edit_file`
+    inside an isolated worktree, with the path checks and the never-send list applied — rather than
+    a property of an SDK, so there is no separate ability for it. An earlier version declared one,
+    and it was a distinction with nothing behind it: every adapter that can expose the registry can
+    expose the tool that writes.
+    """
 
     STRUCTURED_OUTPUT = "structured-output"
     """Can constrain a session's answer to a schema.
@@ -40,14 +44,15 @@ class Ability(StrEnum):
 NEEDS: dict[Role, frozenset[Ability]] = {
     Role.INTENT: frozenset(),
     Role.ANALYST: frozenset({Ability.TOOLS}),
-    Role.FIXER: frozenset({Ability.TOOLS, Ability.WRITES}),
+    Role.FIXER: frozenset({Ability.TOOLS}),
     Role.WRITER: frozenset(),
 }
 """What a role cannot work without.
 
 `intent` and `writer` need nothing special: one classifies a short text, the other formulates one,
-and both answer in a file like everybody else. `analyst` needs the registry, because a finding must
-rest on a call. `fixer` needs both: it establishes what is wrong and then changes it.
+and both answer in a file like everybody else. `analyst` and `fixer` need the registry — one because
+a finding must rest on a call, the other because every edit and every verification command it runs
+goes through it.
 """
 
 

@@ -62,6 +62,106 @@ class Repository:
     def merge_base(self, base: str) -> str:
         return _git(self.path, "merge-base", base, "HEAD").strip()
 
+    def has_branch(self, name: str) -> bool:
+        try:
+            _git(self.path, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}")
+        except ConfigError:
+            return False
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class Worktree:
+    """An isolated checkout on its own branch, where one fix task does its work.
+
+    Isolation buys two things. Parallel fixes cannot see each other's half-finished edits, and a
+    task that ends badly leaves nothing behind: the worktree is removed and its branch with it, so
+    the next run starts from a clean tree rather than from somebody's abandoned attempt.
+
+    The subagent never learns this is a branch. It edits files and runs commands; staging,
+    committing and everything to do with the remote are the agent's, which keeps a commit message
+    derived from the finding rather than from how a model read an instruction.
+    """
+
+    repository: Path
+    path: Path
+    branch: str
+
+    @classmethod
+    def create(cls, repository: Repository, *, branch: str, at: Path) -> Worktree:
+        at.parent.mkdir(parents=True, exist_ok=True)
+        _git(
+            repository.path,
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            branch,
+            str(at),
+            repository.head,
+        )
+        return cls(repository=repository.path, path=at.resolve(), branch=branch)
+
+    def dirty(self) -> tuple[str, ...]:
+        """Paths the session changed, added or removed, as git sees them."""
+        output = _git(self.path, "status", "--porcelain", "--untracked-files=all")
+        return tuple(
+            line[3:].strip().strip('"') for line in output.splitlines() if line[3:].strip()
+        )
+
+    def restore(self) -> None:
+        """Put the checkout back to the head it started from, keeping ignored files.
+
+        Used to ask what was already broken: a failing check is re-run here after the change is
+        taken away. Ignored files stay because a virtual environment or a build cache is what makes
+        the second run cheap, and neither is part of what the change did.
+        """
+        _git(self.path, "reset", "--hard", "--quiet", "HEAD")
+        _git(self.path, "clean", "--force", "-d", "--quiet")
+
+    def commit(self, message: str) -> str:
+        """Commit whatever the session left, under the agent's own identity and nobody's settings.
+
+        Every setting that could change the outcome is stated here rather than inherited. A machine
+        with `commit.gpgsign` on and no agent running would otherwise fail to commit a fix that was
+        already verified — losing the work for a reason that has nothing to do with the fix. Hooks
+        are skipped for the same reason and one more: the repository is untrusted content, and the
+        commands this run agrees to execute are the overlay's verification, which already ran.
+        """
+        _git(self.path, "add", "--all")
+        _git(
+            self.path,
+            "-c",
+            "user.name=devsecops-agent",
+            "-c",
+            "user.email=agent@localhost",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--no-verify",
+            "--message",
+            message,
+        )
+        return _git(self.path, "rev-parse", "HEAD").strip()
+
+    def discard(self, *, keep_branch: bool) -> None:
+        """Remove the checkout, and the branch too unless something was committed on it.
+
+        Failure to clean up is deliberately not raised: the fix has already been decided, and
+        losing that decision over a leftover directory would be the worse outcome. The directory
+        lives under the run's own scratch space, so what remains is visible rather than lost.
+        """
+        try:
+            _git(self.repository, "worktree", "remove", "--force", str(self.path))
+        except ConfigError:
+            return
+        if not keep_branch and self.branch:
+            try:
+                _git(self.repository, "branch", "--delete", "--force", self.branch)
+            except ConfigError:
+                return
+
 
 MAX_CHANGED_LINES = 300
 MAX_LINE_CHARS = 400

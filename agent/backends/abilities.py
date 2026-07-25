@@ -34,17 +34,13 @@ CURSOR = Abilities(
 )
 """The Cursor adapter as it stands.
 
-No `writes`: a session is given its own task directory as a workspace, never the repository, so it
-cannot modify the tree under review. That is deliberate for an analyst and a real limitation for a
-fixer, which is why binding `fixer` here is refused rather than quietly ineffective. It changes when
-the adapter learns to run a session in an isolated worktree.
+No `structured-output`: results arrive as a file the core validates, so the adapter has never needed
+to constrain an answer to a schema and does not claim it can.
 """
 
 FAKE = Abilities(
     name="fake",
-    has=frozenset(
-        {Ability.TOOLS, Ability.WRITES, Ability.STRUCTURED_OUTPUT, Ability.TOKEN_ACCOUNTING}
-    ),
+    has=frozenset({Ability.TOOLS, Ability.STRUCTURED_OUTPUT, Ability.TOKEN_ACCOUNTING}),
 )
 """The scripted backend claims everything, because standing in for any backend is its whole purpose.
 

@@ -16,10 +16,12 @@ from agent.tools import (
     Grants,
     HostNotPermitted,
     HttpClient,
+    NotEdited,
     NotPermitted,
     OutsideRepository,
     Requirements,
     Step,
+    Withheld,
     compare_versions,
     grant,
     quarantine,
@@ -102,6 +104,42 @@ def test_reading_a_large_file_is_truncated_rather_than_refused(tmp_path: Path) -
 
     assert text.startswith("x" * 10)
     assert "truncated" in text
+
+
+def test_an_edit_replaces_one_exact_fragment_or_nothing_at_all(tmp_path: Path) -> None:
+    """Every refusal here leaves the file untouched: a half-applied edit is the worst outcome."""
+    path = tmp_path / "pyproject.toml"
+    original = 'dependencies = ["requests==2.31.0", "urllib3==2.31.0"]\nversion = "1.0"\n'
+    path.write_text(original, encoding="utf-8")
+    files = FileTools(root=tmp_path)
+
+    with pytest.raises(NotEdited, match="2 times"):
+        files.edit_file("pyproject.toml", find="2.31.0", replace="2.32.4")
+    with pytest.raises(NotEdited, match="does not contain that text"):
+        files.edit_file("pyproject.toml", find="flask==1.0", replace="flask==3.0")
+    with pytest.raises(NotEdited, match="does not exist"):
+        files.edit_file("uv.lock", find="a", replace="b")
+    with pytest.raises(NotEdited, match="exact text to replace"):
+        files.edit_file("pyproject.toml", find="", replace="everything")
+    with pytest.raises(OutsideRepository):
+        files.edit_file("../escape.txt", find="a", replace="b")
+    assert path.read_text(encoding="utf-8") == original
+
+    line = files.edit_file("pyproject.toml", find="requests==2.31.0", replace="requests==2.32.4")
+
+    assert line == 1
+    assert "requests==2.32.4" in path.read_text(encoding="utf-8")
+    assert "urllib3==2.31.0" in path.read_text(encoding="utf-8")
+
+
+def test_a_never_send_file_is_not_edited_either(tmp_path: Path) -> None:
+    """Its contents were never shown to the model, so any edit to it would be made blind."""
+    (tmp_path / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
+    files = FileTools(root=tmp_path, never_send=("**/.env",))
+
+    with pytest.raises(Withheld):
+        files.edit_file(".env", find="secret", replace="rotated")
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "TOKEN=secret\n"
 
 
 def runner(tmp_path: Path, *binaries: str) -> CommandRunner:

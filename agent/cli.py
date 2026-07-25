@@ -47,6 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="this run came from a schedule, so the restraint rules for unattended runs apply",
     )
+    maintain.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "analyse and say which findings would be fixed, without touching the repository: no "
+            "worktree, no branch, no commit"
+        ),
+    )
 
     explain = subcommands.add_parser("explain", help="show a recorded run")
     explain.add_argument("--run", required=True, help="run identifier")
@@ -144,6 +152,7 @@ def _request(arguments: argparse.Namespace) -> Request:
         change=getattr(arguments, "change", None),
         wake_issue=getattr(arguments, "wake_issue", None),
         plan_only=arguments.plan_only,
+        dry_run=getattr(arguments, "dry_run", False),
         use_cache=not arguments.no_cache,
         only=tuple(arguments.only or ()),
     )
@@ -164,6 +173,11 @@ def _print_summary(record: RunRecord) -> None:
     for finding in manifest.findings:
         marker = "block" if finding["action"] == "block" else "note "
         print(f"  {marker} {finding['severity']:<8} {finding['key']}")
+    for fix in manifest.fixes:
+        where = fix["branch"] or fix["detail"] or fix["outcome"]
+        print(f"  {fix['outcome']:<10} {fix['finding']}\n             {where}")
+    for entry in manifest.remediation.get("deferred", []):
+        print(f"  deferred   {entry['finding']}\n             {entry['reason']}")
     if manifest.cost.get("known"):
         print(f"cost {manifest.cost['tokens']} tokens over {manifest.cost['sessions']} session(s)")
     print(f"result {manifest.result}  exit {int(record.exit_code)}")
