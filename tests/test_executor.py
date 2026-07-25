@@ -12,6 +12,7 @@ from pathlib import Path
 
 from agent.backends import Brief, Budget, Failure, FakeBackend, Scripted, SessionResult
 from agent.backends.select import Roster
+from agent.containment import Checkout
 from agent.domain import Outcome, Plan, PlannedTask, Reason, Role, Trigger
 from agent.evidence import Evidence, EvidenceStore, Origin, Subject
 from agent.executor import Executed, execute
@@ -59,7 +60,12 @@ def plan_of(task_id: str = "deps-vuln") -> Plan:
 
 
 def run(
-    backend: FakeBackend, library: Library, tmp_path: Path, *, evidence: EvidenceStore | None = None
+    backend: FakeBackend,
+    library: Library,
+    tmp_path: Path,
+    *,
+    evidence: EvidenceStore | None = None,
+    checkout: Checkout | None = None,
 ) -> list[Executed]:
     # `or` would be wrong here: an empty store is falsy, which is exactly the case one test needs.
     store = store_with_a_fact() if evidence is None else evidence
@@ -80,6 +86,7 @@ def run(
             tasks_dir=tmp_path / "tasks",
             budget=BUDGET,
             toolkits=Toolkits(session=session, now=MOMENT, quarantine_days=7),
+            checkout=checkout,
         )
     )
 
@@ -137,6 +144,25 @@ def test_a_result_written_deeper_in_the_workspace_is_read_and_recorded_as_such(
     assert executed[0].outcome.outcome is Outcome.CLEAN
     assert len(executed[0].attempts) == 1
     assert executed[0].attempts[0].salvaged.endswith("runs/x/result.json")
+
+
+def test_a_session_that_edits_the_checkout_has_its_result_refused(
+    library: Library, git_repo: Path, tmp_path: Path
+) -> None:
+    """It made a change somewhere nobody will look, and reported one. Both cannot be believed."""
+
+    class Straying(FakeBackend):
+        async def execute(self, brief: Brief) -> SessionResult:
+            (git_repo / "README.md").write_text("edited in the wrong tree\n", encoding="utf-8")
+            return await super().execute(brief)
+
+    backend = Straying(default=Scripted(result={"outcome": "clean"}))
+    executed = run(backend, library, tmp_path, checkout=Checkout.of(git_repo))
+
+    assert executed[0].outcome.outcome is Outcome.UNVERIFIED
+    assert "checkout" in executed[0].attempts[0].rejected
+    assert [stray.path for stray in executed[0].attempts[0].strayed] == ["README.md"]
+    assert (git_repo / "README.md").read_text(encoding="utf-8") == "product\n"
 
 
 def test_a_valid_result_becomes_the_tasks_outcome(library: Library, tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import Config, Models
+from agent.containment import Checkout
 from agent.domain import FixOutcome, Intent, Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
 from agent.escalate import Escalation, weigh
@@ -378,6 +379,7 @@ def run(
         scratch_root=run_directory / "scratch",
         never_send=config.never_send,
         reading_token=reading,
+        tool_cache=_tool_cache(request, config),
     )
 
     owned = backend is None
@@ -427,6 +429,11 @@ def run(
                     "anything waiting for approval was left waiting"
                 )
 
+    # Watched from here, so that anything already uncommitted when the run started is left alone and
+    # only what a session does is undone.
+    facts = _cache_root(request, config)
+    mine = (run_directory, _tool_cache(request, config), *((facts,) if facts else ()))
+    checkout = Checkout.of(repository.path, mine=mine)
     performed = asyncio.run(
         _conduct(
             plan,
@@ -447,9 +454,18 @@ def run(
             restraint=posture.aside,
             proposed=proposed,
             approvals=approvals,
+            checkout=checkout,
             close=owned,
         )
     )
+    if checkout.strayed:
+        manifest.warnings.append(
+            "a session wrote into the repository's checkout instead of the worktree it was given: "
+            + ", ".join(stray.path for stray in checkout.strayed)
+            + ". The checkout was put back and the results of those attempts were refused; the "
+            "changes are kept under the run directory. A backend whose own file tools are not "
+            "confined does this, so check that the sandbox is on for the backend in use"
+        )
     manifest.budget["spend"] = ledger.spend.as_json()
     if performed.read is not None:
         manifest.wake |= performed.read.as_json()
@@ -566,6 +582,7 @@ async def _conduct(
     restraint: str,
     proposed: tuple[str, ...],
     approvals: dict[str, Approval],
+    checkout: Checkout,
     close: bool,
 ) -> Performed:
     """Everything that needs a model, in one event loop, including the shutdown.
@@ -593,6 +610,7 @@ async def _conduct(
                 patching=patching,
                 restraint=restraint,
                 approvals=approvals,
+                checkout=checkout,
             )
             if performed.halted or performed.answered is not None:
                 return performed
@@ -613,6 +631,7 @@ async def _conduct(
             may_fix=may_fix,
             proposed=proposed,
             approvals=approvals,
+            checkout=checkout,
         )
         return performed
     finally:
@@ -637,6 +656,7 @@ async def _episode(
     patching: bool,
     restraint: str,
     approvals: dict[str, Approval],
+    checkout: Checkout,
 ) -> Plan:
     """Read the comment, then do the one thing the table says it asks for.
 
@@ -691,6 +711,7 @@ async def _episode(
                 toolkits=toolkits,
                 ledger=ledger,
                 run=manifest.run_id,
+                checkout=checkout,
             )
         case Course.RECHECK:
             _release(performed, woken, approvals=approvals, when=toolkits.now)
@@ -749,6 +770,7 @@ async def _perform(
     may_fix: bool,
     proposed: tuple[str, ...],
     approvals: dict[str, Approval],
+    checkout: Checkout,
 ) -> None:
     """Analyse, decide, and then — on a maintenance run — fix what the decision allows."""
     performed.executed = await execute(
@@ -761,6 +783,7 @@ async def _perform(
         budget=budget,
         toolkits=toolkits,
         ledger=ledger,
+        checkout=checkout,
     )
     performed.verdict = _conclude(manifest, performed.executed, rules=rules, session=session)
     if not may_fix:
@@ -788,6 +811,7 @@ async def _perform(
         toolkits=toolkits,
         ledger=ledger,
         run=manifest.run_id,
+        checkout=checkout,
     )
     _account(manifest, performed.fixes)
 
@@ -1206,6 +1230,13 @@ def _cost(models: list[dict[str, object]]) -> dict[str, object]:
         "sessions": len(models),
         "accounted_sessions": accounted,
     }
+
+
+def _tool_cache(request: Request, config: Config) -> Path:
+    """Resolved like the fact cache, and kept even when facts are not: `--no-cache` is about not
+    trusting a remembered answer, not about downloading the same crates a second time."""
+    path = config.storage.tool_path
+    return path if path.is_absolute() else request.repository / path
 
 
 def _cache_root(request: Request, config: Config) -> Path | None:

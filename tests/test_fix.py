@@ -84,6 +84,7 @@ def judged(
     remediation: str = "Move the pin to 2.32.4.",
     reliability: Reliability = Reliability.REPRODUCIBLE,
     advisory: str = "",
+    target: str = "2.32.4",
 ) -> Judged:
     finding = Finding(
         capability="capabilities/deps-vuln",
@@ -96,6 +97,7 @@ def judged(
         remediation=remediation,
         location=Location(path="pyproject.toml", line=12),
         advisory=advisory or f"PYSEC-{package}",
+        target=target,
     )
     return Judged(
         finding=finding,
@@ -145,6 +147,33 @@ def test_only_a_demonstrated_finding_with_a_remedy_is_fixed(
     deferred = dict(queue.deferred)
     assert "heuristic" in deferred[judged(package="urllib3").finding.key]
     assert "no remediation" in deferred[judged(package="idna").finding.key]
+
+
+def test_a_pin_with_nowhere_to_move_is_reported_and_not_fixed(
+    library: Library, overlay: Overlay, git_repo: Path
+) -> None:
+    """Quarantine makes these weekly: real, reported, and with no cleared version to move to.
+
+    The first live run queued one anyway, and the session invented a move — a major downgrade of an
+    action, which nobody asked for and no evidence supported.
+    """
+    waiting = judged(
+        package="actions/setup-python",
+        remediation="Wait until v7.0.0 clears quarantine before this pin is adoptable.",
+        target="",
+    )
+
+    queue = plan_fixes(
+        (judged(package="requests"), waiting),
+        library=library,
+        overlay=overlay,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        max_open_fix_requests=5,
+    )
+
+    assert [job.judged.finding.subject.package for job in queue.jobs] == ["requests"]
+    assert "no version to move to" in dict(queue.deferred)[waiting.finding.key]
 
 
 def test_security_is_queued_first_and_the_queue_has_a_ceiling(

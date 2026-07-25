@@ -7,6 +7,13 @@ fact_cache:
   path: .agent/cache
   enabled: true
 
+# What a verification command downloads in order to run: the crate registry, the Go module cache,
+# wheels. Deliberately not the machine's own home — a command is given a home directory of its own so
+# that it cannot read the credentials a developer or a runner keeps in theirs — and deliberately not
+# the fact cache, which is small and worth restoring everywhere; this one is large and disposable.
+tool_cache:
+  path: .agent/tools
+
 # Counters the agent must remember between runs, such as consecutive failures of one source. Kept in
 # a dedicated ref so it survives cache eviction, leaves the default branch untouched, and still has
 # a history someone can read.

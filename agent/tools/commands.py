@@ -22,6 +22,24 @@ DEFAULT_TIMEOUT_SECONDS = 120
 STOP_GRACE_SECONDS = 5
 TRUNCATION_MARKER = "\n… truncated\n"
 
+FALLBACK_PATH = "/usr/local/bin:/usr/bin:/bin"
+
+WHERE_THE_TOOLCHAIN_IS = (
+    "RUSTUP_HOME",
+    "GOROOT",
+    "JAVA_HOME",
+    "PYENV_ROOT",
+    "NVM_DIR",
+    "SDKMAN_DIR",
+)
+"""Variables that say where an installed toolchain lives, passed through when the agent has them.
+
+These name directories of compilers, not of people: no credential is kept in any of them. Without
+them a build tool that keeps its toolchains under a home directory cannot find them — `cargo` says
+"no default toolchain is configured" and every Rust verification fails for a reason that has nothing
+to do with the change being verified. That is not a safe default; it is a check that can only say
+no."""
+
 
 class NotPermitted(Exception):
     """The binary is outside what this run may execute. Not a reason to try another spelling."""
@@ -51,6 +69,9 @@ class CommandRunner:
     grants: Grants
     workdir: Path
     scratch: Path
+    tools: Path = Path(".agent/tools")
+    """Where a command may download what it needs — the crate registry, the module cache, wheels.
+    Shared between runs on purpose: without it every verification starts by fetching the world."""
     timeout: int = DEFAULT_TIMEOUT_SECONDS
 
     def run(
@@ -99,13 +120,47 @@ class CommandRunner:
         )
 
     def _environment(self) -> dict[str, str]:
-        """A minimal environment: the run's secrets are not a command's business."""
-        return {
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
+        """Where the toolchain is and where it may write, and nothing about who the agent is.
+
+        Built rather than inherited, because a command may be running code that arrived in the
+        change under review: no token, no registry login, no key reaches it, and `HOME` points at a
+        directory that dies with the task rather than one holding `.netrc`, `.ssh` and a logged-in
+        CLI.
+
+        What it does get is the toolchain the product's own CI would have. The first live fix proved
+        the difference: with a home directory of its own and a fixed `PATH`, `cargo` could not find
+        a single toolchain, so the verification that decides whether a fix ships failed on every
+        Rust repository regardless of the fix. Downloads go to the agent's own cache for the same
+        reason the home directory is replaced — a crate registry in somebody's home may hold their
+        publishing token, and nothing here needs to read it.
+        """
+        caches = {
+            "CARGO_HOME": self.tools / "cargo",
+            "GOPATH": self.tools / "go",
+            "GOCACHE": self.tools / "go" / "build",
+            "UV_CACHE_DIR": self.tools / "uv",
+            "PIP_CACHE_DIR": self.tools / "pip",
+            "npm_config_cache": self.tools / "npm",
+        }
+        for path in caches.values():
+            path.mkdir(parents=True, exist_ok=True)
+        environment = {
+            "PATH": os.environ.get("PATH") or FALLBACK_PATH,
             "HOME": str(self.scratch),
             "LC_ALL": "C",
             "NO_COLOR": "1",
-        }
+        } | {name: str(path) for name, path in caches.items()}
+        for name in WHERE_THE_TOOLCHAIN_IS:
+            found = os.environ.get(name)
+            if found:
+                environment[name] = found
+        if "RUSTUP_HOME" not in environment:
+            # rustup's own default is `$HOME/.rustup`, and this command's home is a scratch
+            # directory that never saw an installer. Naming the real one is what makes `cargo` work.
+            installed = Path("~/.rustup").expanduser()
+            if installed.is_dir():
+                environment["RUSTUP_HOME"] = str(installed)
+        return environment
 
 
 def _stop(process: subprocess.Popen[str]) -> None:

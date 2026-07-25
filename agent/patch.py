@@ -32,6 +32,7 @@ from agent.backends.port import Budget, Failure
 from agent.backends.select import Roster
 from agent.brief import FIX_RESULT_SHAPE, compose, knowledge_for, quoted, role_instructions
 from agent.budget import Ledger
+from agent.containment import Checkout
 from agent.domain import AnswerOutcome, FixOutcome, PlannedTask, Reason, Role
 from agent.errors import ConfigError
 from agent.executor import run_attempts
@@ -85,6 +86,7 @@ async def prepare(
     toolkits: Toolkits,
     ledger: Ledger,
     run: str,
+    checkout: Checkout | None = None,
 ) -> Answered:
     """Prepare a change for the remark somebody asked about, and offer it in their conversation.
 
@@ -116,6 +118,7 @@ async def prepare(
             toolkits=toolkits,
             ledger=ledger,
             run=run,
+            checkout=checkout,
         )
     finally:
         # Always, and with the branch: this checkout was a place to try an edit, and the edit either
@@ -138,6 +141,7 @@ async def _attempt(
     toolkits: Toolkits,
     ledger: Ledger,
     run: str,
+    checkout: Checkout | None = None,
 ) -> Answered:
     toolkit = toolkits.for_task(task, step_limit=budget.steps, worktree=tree.path)
     instructions = role_instructions(Role.FIXER)
@@ -166,6 +170,7 @@ async def _attempt(
         toolkit=toolkit,
         prompt_for=prompt_for,
         parse=read_fix_result,
+        checkout=checkout,
     )
     for attempt in attempted.attempts:
         await ledger.record(attempt.session.usage)

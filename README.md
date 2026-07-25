@@ -107,6 +107,7 @@ Three kinds of persistence, separate because losing each one means something dif
 | --- | --- | --- |
 | run record: manifest and evidence | `--run-dir`, published as a CI artefact | every run |
 | cache of immutable facts | `.agent/cache`, a directory a CI cache can restore and save | only a run on the default branch |
+| what a verification command downloads | `.agent/tools`: the crate registry, the module cache, wheels | any run that verifies a fix |
 | agent state: which checks keep failing | the git ref named in `agent/config/storage.yaml` | only a scheduled run, and only when it changed |
 
 Only facts that cannot change are cached — a version's publication date, an artefact digest. Advisory
@@ -116,6 +117,22 @@ a package.
 
 The state is separate from the cache on purpose. A cache may vanish and cost only time; the state
 decides whether a person is told something, so it must not depend on a runner keeping a directory.
+
+A session is not trusted to stay in the tree it was given, either. Every change a task is meant to
+make goes through the agent's tools, into a worktree the agent made for it — but a backend brings file
+tools of its own, and what confines those is the backend's sandbox, which is a setting and can be off.
+So the repository's checkout is watched: anything a session changes there is copied into the run
+record, the checkout is put back, and the attempt is refused rather than believed. A session that
+edited the wrong tree believes it made a change that is not on the branch, and that claim is the one
+thing worse than no fix at all. Uncommitted work that was already there when the run started is never
+touched.
+
+The tool cache exists because a command is not given a home directory to keep things in. Every command
+a task runs gets a built environment: the `PATH` and the toolchain locations the machine has, so a
+compiler can be found at all, a home directory of its own that dies with the task, and no credential
+of any kind. That last part is why the cache is named separately — a crate registry directory in a
+developer's home may hold their publishing token, and a check that verifies a dependency move has no
+business reading it.
 
 Exit codes are an interface, because CI acts on them: `0` permitted, `5` blocked, `6` inconclusive,
 `64` configuration error, `2` internal failure. A run that could not execute its tasks exits `6` and

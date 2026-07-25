@@ -23,6 +23,7 @@ from agent.backends.port import Budget, Failure
 from agent.backends.select import Roster
 from agent.brief import FIX_RESULT_SHAPE, compose, knowledge_for, role_instructions
 from agent.budget import Ledger
+from agent.containment import Checkout
 from agent.domain import FixOutcome, PlannedTask, Reason, Role
 from agent.errors import ConfigError
 from agent.evidence import Reliability
@@ -263,14 +264,25 @@ def _unfixable(item: Judged, approvals: dict[str, Approval]) -> str | None:
     like" is worse when the action is a change to shipping code than when it is a comment. A finding
     with no stated remedy has nothing to act on either — a fix task would be asked to invent one.
 
-    A hold is different from both, and its wording says so: nothing is wrong with the finding or its
-    evidence, and the run is not giving up on it. It is waiting for a person, and it will wait for
-    as many runs as that takes.
+    So does a pin whose only remedy is to wait. Quarantine produces those every week: the newest
+    release is real, it is reported, and there is no version to move to until the clock runs out.
+    The first live maintenance run queued one, and the session did what a session asked to fix an
+    unfixable thing does — it invented a move, downgrading an action by a major version, which
+    nobody had asked for and no evidence supported.
+
+    A hold is different from all of them, and its wording says so: nothing is wrong with the finding
+    or its evidence, and the run is not giving up on it. It is waiting for a person, and it will
+    wait for as many runs as that takes.
     """
     if item.reliability is not Reliability.REPRODUCIBLE:
         return "the evidence behind it is heuristic, so a code change would rest on a guess"
     if not item.finding.remediation:
         return "it states no remediation, so there is nothing to apply"
+    if item.finding.subject.package and not item.finding.target:
+        return (
+            "it names no version to move to, so there is nothing to apply — it is reported until "
+            "there is one"
+        )
     hold = waiting(item.finding, approvals)
     if hold:
         return f"{hold}. Nobody has, on its issue, so it waits"
@@ -309,6 +321,7 @@ async def apply(
     toolkits: Toolkits,
     ledger: Ledger,
     run: str,
+    checkout: Checkout | None = None,
 ) -> list[Fix]:
     """Prepare each fix in its own worktree, then keep only the ones that verified.
 
@@ -359,6 +372,7 @@ async def apply(
                 budget=budget,
                 toolkits=toolkits,
                 ledger=ledger,
+                checkout=checkout,
             )
 
     await asyncio.gather(*(run_one(index, job, tree) for index, (job, tree) in enumerate(prepared)))
@@ -383,6 +397,7 @@ async def _one(
     budget: Budget,
     toolkits: Toolkits,
     ledger: Ledger,
+    checkout: Checkout | None = None,
 ) -> Fix:
     task = job.task
     toolkit = toolkits.for_task(task, step_limit=budget.steps, worktree=tree.path)
@@ -412,6 +427,7 @@ async def _one(
         toolkit=toolkit,
         prompt_for=prompt_for,
         parse=read_fix_result,
+        checkout=checkout,
     )
     for attempt in attempted.attempts:
         await ledger.record(attempt.session.usage)

@@ -107,9 +107,30 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   publishing never went through the ceiling. `hub.docker.com`, `registry-1.docker.io`, `auth.docker.io`
   and `ghcr.io` are permitted, because the library now names them and a host nobody names is a host
   nobody grants — container image facts were unobtainable while the profile called them reproducible.
-- The pinned knowledge library is `0.4.4`: acquisition recipes no longer send a session to a command
+- The pinned knowledge library is `0.4.5`: acquisition recipes no longer send a session to a command
   that has to log in, an action's publish date comes from the platform API with the tag-without-a-release
-  case covered, and the image registry hosts are named rather than described.
+  case covered, the image registry hosts are named rather than described, and the contract says what an
+  absent target means — a pin with nowhere to move is reported, not fixed.
+- A finding about a package that names no version to move to is reported and not queued for a fix.
+  Quarantine produces one every week: the newest release is real, it is worth reporting, and there is
+  nothing to move to until the clock runs out. The first live maintenance run queued one anyway, and
+  the session did what a session asked to fix an unfixable pin does — it invented a move, downgrading
+  an action by a major version that nobody had asked to downgrade and no evidence supported.
+- The repository's checkout is watched while sessions run, instead of the agent trusting a backend's
+  sandbox to keep them out of it. A write that appears there is copied into the run record, undone, and
+  the attempt refused. On the same live fix two sessions edited the checkout through the backend's own
+  file tools, left the worktree they were given empty, and were recorded as having claimed a fix
+  without making one — two paid sessions wasted, two misleading refusals, and a developer's tree
+  modified in files nobody had asked about. Uncommitted work that predates the run is left alone.
+- A command is told where the machine's toolchains live and given a cache of its own to download into,
+  instead of a `PATH` of three directories and a home nobody ever installed anything in. The first live
+  fix failed on that and nothing else: `cargo clippy` and `cargo test` answered "no default toolchain is
+  configured", which made verification — the thing that decides whether a fix ships — impossible to pass
+  on any Rust repository regardless of the change. `RUSTUP_HOME`, `GOROOT`, `JAVA_HOME` and their kin are
+  passed through when the agent has them; downloads land in `.agent/tools` rather than in a home
+  directory, since a crate registry in somebody's home may hold their publishing token. The rest is
+  unchanged: no credential of the agent's reaches a command, and its home directory still dies with the
+  task.
 
 - A status note on a woken issue now reports what the run actually did. It asked whether the owning
   check finished `clean`, which is the rule for *closing* an issue, so a recheck that found the
