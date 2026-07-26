@@ -10,6 +10,11 @@ parallel tasks, giving those tasks deterministic tools, aggregating their result
 acting once on the hosting platform. It contains no severity criteria, no quarantine rules and no
 ecosystem procedures — those are prose in the library.
 
+## Write-up
+
+Long-form article on Medium (what the agent is, how evidence and gates work, live demo scenarios):
+[AI Agents Driving the Future of Software Development and DevSecOps Platforms — Model-Agnostic, and It Shows Its Evidence](https://medium.com/@amsokol.com/ai-agents-driving-the-future-of-software-development-and-devsecops-platforms-model-agnostic-and-219d6c6ca14a).
+
 ## Design
 
 Start with [`DESIGN.md`](DESIGN.md), which covers the architecture, the model selection per role,
@@ -29,7 +34,7 @@ uv run agent explain --run <run-id>
 uv run agent pin --library ./library   # version and digest, to fill agent/config/library.yaml
 ```
 
-This release runs on knowledge library `v0.4.3` and verifies it at startup: a library the pin does
+This release runs on knowledge library `v0.5.1` and verifies it at startup: a library the pin does
 not name is a configuration error, because a gate running on unverified knowledge cannot say what it
 checked. The digest covers identity, index and document bodies rather than the directory, so a
 checkout of the tag and the unpacked release artefact verify the same.

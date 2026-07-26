@@ -13,11 +13,9 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract range.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
-## Unreleased
+## 0.1.0 — 2026-07-26
 
-The first release is not cut yet, so this section is the whole history: what the agent does today.
-Once a version is tagged, this heading is replaced by that version and no `Unreleased` section is kept
-— an empty one is a step to forget, and the library repository has already forgotten it once.
+First release of the runner. Pins knowledge library `0.5.1` (contract version 2).
 
 ### Added
 
