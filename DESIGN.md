@@ -979,6 +979,15 @@ deliberately did not do is provable only locally, although that is exactly the p
 traceability was built. Direction: a publishable run summary with a durable link — a comment, an
 artefact or a records branch; the decision depends on what counts as long-term storage.
 
+**8. Maintenance does not catch pins already on the default branch that break quarantine.** The
+library already names a currently pinned version younger than **N** as a forbidden state, and says
+maintenance must open or update an issue for it. Live runs still behave as if quarantine applied
+only to *candidates* for a bump: what is already merged and still inside the window stays silent.
+Direction: a maintenance run must evaluate every current pin against `check_quarantine`, not only
+the versions it might move to, and turn a not-cleared current pin into a published finding (issue)
+without "fixing" it by adopting a newer version that is also inside the window. The knowledge half
+of the same gap is in the library design, section 16.
+
 ## 16. Planned: trust surfaces
 
 Fork-safe execution (section 8) protects the *run*. It does not yet ask whether an external
