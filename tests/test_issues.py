@@ -7,8 +7,9 @@ from typing import Any
 
 import pytest
 from agent.absence import Absences
+from agent.coverage import Coverage
 from agent.domain import Outcome, RunResult
-from agent.evidence import Reliability, Subject
+from agent.evidence import Evidence, Origin, Reliability, Subject
 from agent.findings import Action, Finding, Klass, Location, Severity
 from agent.issues import LABEL, Tracking, track_findings
 from agent.scm.fake import FakePlatform
@@ -51,6 +52,22 @@ def verdict_of(*items: Judged) -> Verdict:
     return Verdict(result=RunResult.BLOCKED, judged=items, blocking=items)
 
 
+def covering(*packages: str) -> Coverage:
+    """A run that examined exactly these packages of the ecosystem the findings here belong to."""
+    return Coverage.of(
+        Evidence.verified(
+            question="latest-version",
+            subject=Subject(ecosystem="ecosystems/python-uv", package=package),
+            value="3.1.6",
+            origin=Origin.API,
+            source="https://pypi.org/",
+            observed_at=WHEN,
+            recipe=f"{CAPABILITY}@fetch",
+        )
+        for package in packages
+    )
+
+
 def track(
     platform: FakePlatform,
     verdict: Verdict,
@@ -58,6 +75,7 @@ def track(
     outcomes: tuple[TaskOutcome, ...] = (CLEAN,),
     limit: int = 10,
     memory: dict[str, Any] | None = None,
+    coverage: Coverage | None = None,
 ) -> Tracking:
     """One run of the reconciliation, carrying the streaks forward when a test passes a memory.
 
@@ -65,7 +83,7 @@ def track(
     so a test about a closure is a test that keeps the memory between its calls.
     """
     carried = memory if memory is not None else {}
-    counted = Absences.of(carried, outcomes=outcomes, run="run-1", when=WHEN)
+    counted = Absences.of(carried, outcomes=outcomes, run="run-1", when=WHEN, coverage=coverage)
     record = track_findings(
         platform, verdict=verdict, absences=counted, head=HEAD, limit=limit, label=LABEL
     )
@@ -211,6 +229,38 @@ def test_an_issue_a_person_is_reading_settles_on_the_first_answer(
 
     assert what(record) == ["closed"]
     assert not platform.tracked
+
+
+def test_a_sweep_that_did_not_reach_the_package_cannot_close_its_issue(
+    platform: FakePlatform,
+) -> None:
+    """The live failure this guards: a check that completed, and got through part of the tree.
+
+    Its report is a list of findings and looks no different from a thorough run's. What tells them
+    apart is the evidence, which names what was actually examined.
+    """
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+
+    short = track(platform, verdict_of(), memory=memory, coverage=covering("cryptography"))
+
+    assert what(short) == ["kept-open"]
+    assert "did not get to it this run" in short.posted[0].detail
+    assert len(platform.tracked) == 1
+
+
+def test_a_run_that_did_not_reach_a_package_does_not_spend_its_absence(
+    platform: FakePlatform,
+) -> None:
+    """Same rule as a check that did not finish: only runs that looked are allowed to count."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+    track(platform, verdict_of(), memory=memory, coverage=covering("jinja2"))
+    track(platform, verdict_of(), memory=memory, coverage=covering("cryptography"))
+
+    third = track(platform, verdict_of(), memory=memory, coverage=covering("jinja2"))
+
+    assert what(third) == ["closed"]
 
 
 def test_a_check_that_did_not_finish_leaves_the_issue_exactly_as_it_was(

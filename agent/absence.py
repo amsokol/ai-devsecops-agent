@@ -5,11 +5,17 @@ the one write in this agent where being wrong is quiet and permanent — the opp
 thread, where the next push reopens what was resolved too early and the person watching sees it.
 
 So the issue path waits for the claim to hold twice. The check that owns the finding must have
-reached a complete answer, and must have done so twice in a row without listing the finding. One
-complete answer would be enough if a task were exhaustive; it is asked to be and mostly is, but the
-cost of the exception — an issue closed as fixed while the pin is still there — is a person trusting
-a tracker that is wrong. The cost of waiting is that a genuinely fixed problem stays visible for one
-more run, and a run of a repository nobody is watching happens weekly.
+reached a complete answer, must have examined the thing the finding is about, and must have done so
+twice in a row without listing it. One complete answer would be enough if a task were exhaustive; it
+is asked to be and mostly is, but the cost of the exception — an issue closed as fixed while the pin
+is still there — is a person trusting a tracker that is wrong. The cost of waiting is that a
+genuinely fixed problem stays visible for one more run, and a run of a repository nobody is watching
+happens weekly.
+
+"Examined the thing" is a separate gate rather than part of completeness because a complete answer
+is not the same as an exhaustive one. The two live runs that produced this rule differed by two of
+six action pins, both runs said `findings`, and only the evidence showed which had been looked at —
+see `agent/coverage.py`.
 
 The streak is per finding key and lives in `agent/state.py`, for the same reason the failure streaks
 do: a cache may be evicted, and "has this been gone for two runs?" answered from an evicted cache is
@@ -23,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from agent.coverage import Coverage
 from agent.escalate import about_a_failure
 from agent.reconcile import unproven
 from agent.verdict import TaskOutcome
@@ -44,6 +51,8 @@ class Absences:
     outcomes: tuple[TaskOutcome, ...]
     run: str
     when: datetime
+    coverage: Coverage = field(default_factory=lambda: Coverage(examined={}))
+    """What this run examined, for the findings where examining every one of them is the job."""
     before: dict[str, Any] = field(default_factory=dict)
     asked: frozenset[str] = frozenset()
     """Findings a person wrote about, waking this run. Their issues settle on the first answer.
@@ -62,6 +71,7 @@ class Absences:
         outcomes: tuple[TaskOutcome, ...],
         run: str,
         when: datetime,
+        coverage: Coverage | None = None,
         asked: frozenset[str] = frozenset(),
         threshold: int = THRESHOLD,
     ) -> Absences:
@@ -70,6 +80,7 @@ class Absences:
             outcomes=outcomes,
             run=run,
             when=when,
+            coverage=coverage if coverage is not None else Coverage(examined={}),
             before=dict(stored) if isinstance(stored, dict) else {},
             asked=asked,
             threshold=threshold,
@@ -82,12 +93,27 @@ class Absences:
     def settled(self, key: str) -> str | None:
         """`None` when this issue may be closed now, or why it is being left open for now.
 
-        Two gates, in this order because they answer different things. Whether the run knows
-        anything about the absence at all is `unproven`'s question, and it is not counted: a check
-        that did not run leaves the streak exactly as it was, or a repository whose runs alternate
-        between ecosystems would close everything on the strength of never having looked.
+        Three gates, in this order because they answer progressively narrower questions and only the
+        narrowest is about this finding.
+
+        Whether the run knows anything at all is `unproven`'s: a check that did not run, ran out of
+        budget or could not run its tools says nothing, or a repository whose runs alternate between
+        ecosystems would close everything on the strength of never having looked.
+
+        Whether it knows anything about *this* subject is `coverage`'s. A check completes by
+        answering what it examined, and what it examined is not always everything it was asked to —
+        the run that found this necessary got through four of six action pins and reported as
+        confidently as the one that got through all six.
+
+        Neither is counted. A run that could not speak leaves the streak exactly where it was, so
+        two counted runs are always two runs that actually looked.
         """
         pending = unproven(key, self.outcomes)
+        if pending is None and self.coverage.looked_at(key) is False:
+            pending = (
+                "the check completed but recorded nothing about this package, so it did not get to "
+                "it this run. An issue is not closed on a sweep that did not reach its subject"
+            )
         if pending is not None:
             entry = self.before.pop(key, None)
             if entry is not None:

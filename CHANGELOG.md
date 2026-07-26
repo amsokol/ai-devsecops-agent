@@ -107,11 +107,16 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   publishing never went through the ceiling. `hub.docker.com`, `registry-1.docker.io`, `auth.docker.io`
   and `ghcr.io` are permitted, because the library now names them and a host nobody names is a host
   nobody grants — container image facts were unobtainable while the profile called them reproducible.
-- The pinned knowledge library is `0.5.0`, contract version 2: a finding about a package names its kind
+- The pinned knowledge library is `0.5.1`, contract version 2: a finding about a package names its kind
   from a closed vocabulary, acquisition recipes no longer send a session to a command that has to log in,
   an action's publish date comes from the platform API with the tag-without-a-release case covered, the
   image registry hosts are named rather than described, and the contract says what an absent target
-  means — a pin with nowhere to move is reported, not fixed.
+  means — a pin with nowhere to move is reported, not fixed. `0.5.1` settles which of several true
+  words a pin's problem gets, by an ordered test on the reference rather than by judgement: two live
+  runs called one image tag `floating` and then `outdated` and filed one line of YAML as two issues.
+  It also asks a repository-wide sweep to enumerate every pin before querying anything and to record a
+  fact for each one it examined, the uninteresting ones included, which is what the closure gate above
+  reads.
 - An issue closes when the check that owns the finding reached a complete answer without it, twice in
   a row, instead of only when that check came back completely clean. The strict reading froze the
   tracker: while one pin in an ecosystem was outdated, no issue of that ecosystem could ever close,
@@ -137,8 +142,24 @@ Once a version is tagged, this heading is replaced by that version and no `Unrel
   rephrased, every key moved, and four issues appeared beside the four already describing the same
   problems. One of the old ones held an approval a person had given for a change that waits for one; it
   matched nothing afterwards, and the agent asked them again. A key that moves does not just duplicate,
-  it forgets. One pin can still be two findings under two kinds, so stability did not become coarseness,
-  and a result that names no kind or an unknown one is sent back with the vocabulary.
+  it forgets. Two kinds are still two keys, so stability did not become coarseness, and a result that
+  names no kind or an unknown one is sent back with the vocabulary. Merging two judgements of one
+  problem keeps the kind, which it did not at first: the merged finding was filed under the key it was
+  matched by and carried a different key of its own, so the run reported one problem and tracked
+  another.
+- An issue is closed only when the check examined the package it is about, not merely when the check
+  finished. The two are different answers and nothing distinguished them: a report is a list of
+  findings, and a sweep that got through part of the tree produces the same shape as one that got
+  through all of it. Two consecutive live runs over an unchanged repository examined four and then all
+  six of its action pins, both completed, and under the new closure rule two runs like the first would
+  have closed a live issue as fixed. What a run examined is read out of its evidence rather than
+  declared: `record_fact` already refuses a fact that cites no call, so the subjects of a run's
+  verified evidence are a record of what it did and cannot be inflated by a session that would rather
+  look thorough. The gate calibrates itself to the check — it applies once a check has recorded
+  anything about an ecosystem, so an ecosystem whose last pin was removed still closes its leftover
+  issue, and findings that name a file are untouched, since nobody records a fact per file. A run that
+  examined less than the last one says which subjects it missed, in the report under **Not examined
+  this run** and in `manifest.coverage`.
 - A finding about a package that names no version to move to is reported and not queued for a fix.
   Quarantine produces one every week: the newest release is real, it is worth reporting, and there is
   nothing to move to until the clock runs out. The first live maintenance run queued one anyway, and

@@ -22,6 +22,7 @@ from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
 from agent.config import Config, Models
 from agent.containment import Checkout
+from agent.coverage import Coverage, previous
 from agent.domain import FixOutcome, Intent, Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
 from agent.escalate import Escalation, weigh
@@ -491,30 +492,40 @@ def run(
         manifest.fixes = [fix.as_json() for fix in fixes]
         manifest.remediation = queue.as_json()
 
+    outcomes = tuple(item.outcome for item in executed)
+    covered = Coverage.of(session.evidence)
+    manifest.coverage = covered.as_json()
+    # Before the report rather than with the rest of the publishing, because a run that got through
+    # less of the tree than the last one has to say so in the text a person reads, and the report is
+    # rendered here. Reading the memory is a git command over a ref; writing it still happens after
+    # the issues, where it belongs.
+    escalations, remembered, document, absences, shortfall = _recall(
+        request,
+        config=config,
+        repository=repository,
+        outcomes=outcomes,
+        coverage=covered,
+        run=manifest.run_id,
+        woken=woken,
+    )
+    manifest.warnings.extend(shortfall)
+
     report = render(
         verdict,
         trigger=request.trigger,
-        tasks=tuple(item.outcome for item in executed),
+        tasks=outcomes,
         library_version=library.identity.version,
         unverified_facts=len(session.evidence.unverified()),
         fixes=tuple(fixes),
         notice=notice,
         restraint=posture.restraint,
         approvals=approvals,
+        shortfall=shortfall,
     )
 
     if request.publish and speaker is not None:
-        # After the report, because the report is what gets published, and outside the event loop
-        # because talking to the platform is a subprocess away rather than a coroutine.
-        outcomes = tuple(item.outcome for item in executed)
-        escalations, remembered, document, absences = _recall(
-            request,
-            config=config,
-            repository=repository,
-            outcomes=outcomes,
-            run=manifest.run_id,
-            woken=woken,
-        )
+        # Outside the event loop, because talking to the platform is a subprocess away rather than
+        # a coroutine.
         _announce(
             request,
             manifest=manifest,
@@ -944,9 +955,10 @@ def _recall(
     config: Config,
     repository: Repository,
     outcomes: tuple[TaskOutcome, ...],
+    coverage: Coverage,
     run: str,
     woken: Woken | None,
-) -> tuple[tuple[Escalation, ...], Memory | None, dict[str, Any], Absences]:
+) -> tuple[tuple[Escalation, ...], Memory | None, dict[str, Any], Absences, tuple[str, ...]]:
     """What earlier runs left for this one, and what this one will leave behind.
 
     Two things live in that memory and they are not remembered under the same condition. Which
@@ -962,8 +974,9 @@ def _recall(
     """
     when = datetime.now(UTC)
     asked = frozenset({woken.key} if woken is not None and woken.key else ())
+    blank = Absences.of({}, outcomes=outcomes, run=run, when=when, coverage=coverage, asked=asked)
     if not request.trigger.is_maintenance:
-        return (), None, {}, Absences.of({}, outcomes=outcomes, run=run, when=when, asked=asked)
+        return (), None, {}, blank, ()
     memory = Memory(repository=repository, ref=config.storage.state_ref)
     known = memory.read()
     escalations, document = (
@@ -971,11 +984,15 @@ def _recall(
         if request.trigger.is_scheduled
         else ((), dict(known))
     )
+    # Compared against what was read, and merged after: the other order compares this run's coverage
+    # with itself and finds every run thorough.
+    shortfall = coverage.shortfall(previous(known))
     return (
         escalations,
         memory,
-        document,
-        Absences.of(known, outcomes=outcomes, run=run, when=when, asked=asked),
+        coverage.document(document),
+        Absences.of(known, outcomes=outcomes, run=run, when=when, coverage=coverage, asked=asked),
+        shortfall,
     )
 
 

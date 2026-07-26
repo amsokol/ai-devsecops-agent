@@ -94,6 +94,25 @@ def test_an_inconclusive_run_says_it_claims_nothing() -> None:
     assert "- `capabilities/deps-vuln` — unavailable" in report
 
 
+def test_a_run_that_got_through_less_of_the_tree_says_so_beside_its_findings() -> None:
+    """A short sweep and a thorough one produce the same shape of report, and the reader cannot tell
+    them apart from the findings alone — so the qualification goes where the findings are."""
+    noted = judged(advisory_finding("PYSEC-1"), action=Action.COMMENT)
+    verdict = Verdict(result=RunResult.PASS, judged=(noted,))
+
+    report = render(
+        verdict,
+        trigger=Trigger.MAINTAIN_SCHEDULED,
+        tasks=(TASK,),
+        library_version="0.1.1",
+        shortfall=("deps-outdated examined 4 package(s), against 6 in the last run",),
+    )
+
+    assert "### Not examined this run" in report
+    assert "against 6 in the last run" in report
+    assert report.index("Not examined") > report.index("PYSEC-1")
+
+
 def test_heuristic_evidence_explains_why_it_did_not_block() -> None:
     capped = Judged(
         finding=advisory_finding("PYSEC-1"),
