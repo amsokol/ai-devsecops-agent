@@ -12,11 +12,11 @@ ecosystem procedures — those are prose in the library.
 
 ## Design
 
-Start with [`DESIGN.ru.md`](DESIGN.ru.md) (Russian), which covers the architecture, the model
-selection per role, the agent SDKs behind one narrow port, budgets and degradation, security
-boundaries, and the implementation stages. The exchange contract between library and agent is
-`CONTRACT.md` in the library. What changed between releases, and what a run will do differently
-afterwards, is in [`CHANGELOG.md`](CHANGELOG.md).
+Start with [`DESIGN.md`](DESIGN.md), which covers the architecture, the model selection per role,
+the agent SDKs behind one narrow port, budgets and degradation, security boundaries, and the
+implementation stages. The exchange contract between library and agent is `CONTRACT.md` in the
+library. What changed between releases, and what a run will do differently afterwards, is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## Usage
 
