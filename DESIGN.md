@@ -1058,3 +1058,30 @@ doc for a large feature is a finding or a gap. Those belong in the capability an
 when the work starts. Eval needs paired fixtures: a design brief plus a diff that quietly diverges.
 
 The knowledge side is in the library design, section 18.
+
+## 18. Planned: deployment and infrastructure capabilities
+
+Today the catalogue stops at code and dependencies. A large class of risk lives one layer out: how
+the product is **deployed** — cloud accounts, Kubernetes clusters, serverless runtimes, container
+orchestration, IaC that provisions them. A PR that only touches `Dockerfile`, Helm, Terraform, or a
+cloud workflow can open the world without changing a line of application code, and none of the
+current capabilities is obliged to look there as a first-class job.
+
+**In this architecture.** One or more library capabilities under a clear family (working names:
+`capabilities/deploy-k8s`, `capabilities/deploy-cloud`, and siblings as surfaces mature) on both the
+review and maintain playbooks where the product enables them. Judgement stays in prose: overly open
+RBAC, secrets in plain values, privileged containers, public buckets, missing network policy, drift
+between declared and running shape. Facts that can be established without a model — which resources
+a change touches, which API versions, which images and tags — belong in deterministic tools the
+agent owns (parse and census of known manifests), not in a prompt that asks the model to "find
+misconfigurations". Findings follow the same publish and wake loop as today; fixes ship only when
+the overlay names a verification surface for that ecosystem of deployment, otherwise they stay
+human-only with an explicit reason.
+
+**What is not yet decided.** Whether cloud, Kubernetes and generic IaC are separate capabilities or
+one with ecosystem profiles; how far maintenance goes beyond the tree (live cluster / account state
+vs manifests only); which product overlays opt in first. Eval needs fixtures that look like ordinary
+infra PRs and still carry a known breach. Until those land, deployment review remains a gap a
+scanner or a person fills outside this agent.
+
+The knowledge side of the same plan is in the library design, section 19.
