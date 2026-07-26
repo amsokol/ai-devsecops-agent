@@ -104,8 +104,8 @@ def test_a_pin_keeps_its_key_when_the_wording_changes() -> None:
 
 
 def test_two_problems_with_one_pin_stay_two_findings() -> None:
-    """Being stable is not being coarse: a floating reference and a quarantined version are not the
-    same problem, and merging them would silence whichever was reported second."""
+    """Being stable is not being coarse. The library asks a check for one finding per reference, and
+    if two arrive under different words they are two problems here, not one silently discarded."""
     assert pin(kind=Kind.QUARANTINE).key != pin(kind=Kind.FLOATING).key
 
 
@@ -115,6 +115,16 @@ def test_one_problem_found_twice_is_judged_by_the_stricter_verdict() -> None:
     assert len(merged) == 1
     assert merged[0].severity is Severity.CRITICAL
     assert merged[0].evidence == (TOOL,)
+
+
+def test_a_merged_finding_still_answers_to_the_key_it_was_merged_under() -> None:
+    """`kind` was being dropped here, so the merge filed a finding under one key and produced one
+    whose own key was another. The run then reported one problem and tracked a different one."""
+    merged = merge((pin(kind=Kind.FLOATING), pin(kind=Kind.FLOATING, summary="Reworded.")))
+
+    assert len(merged) == 1
+    assert merged[0].kind is Kind.FLOATING
+    assert merged[0].key == pin(kind=Kind.FLOATING).key
 
 
 def test_reproducible_evidence_blocks_and_the_run_refuses() -> None:

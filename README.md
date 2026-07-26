@@ -108,7 +108,7 @@ Three kinds of persistence, separate because losing each one means something dif
 | run record: manifest and evidence | `--run-dir`, published as a CI artefact | every run |
 | cache of immutable facts | `.agent/cache`, a directory a CI cache can restore and save | only a run on the default branch |
 | what a verification command downloads | `.agent/tools`: the crate registry, the module cache, wheels | any run that verifies a fix |
-| agent state: which checks keep failing, and how long each tracked finding has gone unreported | the git ref named in `agent/config/storage.yaml` | any maintenance run, and only when it changed |
+| agent state: which checks keep failing, how long each tracked finding has gone unreported, and what each check examined last time | the git ref named in `agent/config/storage.yaml` | any maintenance run, and only when it changed |
 
 Every one of those paths, `--run-dir` included, is read relative to the repository being worked on when
 it is not absolute. One rule, because git has the same one: a relative worktree path is resolved from
@@ -399,12 +399,21 @@ same reconciliation by finding key that a review's threads get:
 | the finding is gone, its check finished, first time | the issue is left open and the record says why |
 | the finding is gone, its check finished, again | the issue is closed, with a comment naming what looked and where |
 | the finding is gone but its check did not finish | the issue is left exactly as it was, silently |
+| the finding is gone but the check never reached its package | the issue is left open and the record says the sweep came up short |
 | the issue has no marker | it belongs to a human, label or not |
 
 Finished means the check reached a complete answer, which `findings` is as much as `clean`: a check
 that listed four problems has said what it found, and a fifth is not on the list. Requiring `clean`
 froze the tracker instead — while one pin in an ecosystem was outdated, nothing in that ecosystem could
 close, fixed or not.
+
+Complete is not the same as exhaustive, which is the row above about the sweep. A check answers with
+what it examined, and how much it examined varies: two live runs over one unchanged repository got
+through four and then all six of its action pins, both said `findings`, and the reports were the same
+shape. So a closure also needs the check to have examined the package in question, read out of the
+evidence — a fact cannot be recorded without citing a call that produced it, which makes the examined
+set a record of what the run did rather than a claim about it. A run that got through less than the
+last one says so in its report, under **Not examined this run**.
 
 Twice, because nobody reopens a closed issue to check it, and a task is asked to be exhaustive rather
 than proved to be. The count is per finding, lives in the state ref, and resets the moment the finding

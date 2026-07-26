@@ -85,6 +85,11 @@ class Manifest:
     afterwards, and it cannot be seen anywhere else in the record."""
     cache: dict[str, Any] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
+    coverage: dict[str, Any] = field(default_factory=dict)
+    """Which packages each check examined, as opposed to which ones it had something to say about.
+
+    The difference is invisible in a findings list and decides whether an issue may be closed, so it
+    is recorded where somebody comparing two runs can see it."""
     findings: list[dict[str, Any]] = field(default_factory=list)
     verdict: dict[str, Any] = field(default_factory=dict)
     policy: dict[str, Any] = field(default_factory=dict)
@@ -194,6 +199,7 @@ class Manifest:
             "posture": self.posture,
             "cache": self.cache,
             "evidence": self.evidence,
+            "coverage": self.coverage,
             "findings": self.findings,
             "verdict": self.verdict,
             "policy": self.policy,

@@ -37,6 +37,7 @@ def render(
     notice: str = "",
     restraint: str = "",
     approvals: dict[str, Approval] | None = None,
+    shortfall: tuple[str, ...] = (),
 ) -> str:
     lines = [f"## {HEADLINES[verdict.result]}", ""]
 
@@ -84,6 +85,15 @@ def render(
             "attempted"
             for task in verdict.gaps
         ]
+        lines.append("")
+
+    if shortfall:
+        # Under the findings and above the fixes, because it qualifies the list rather than adding
+        # to it: what a reader needs to know is that the list may be short, and they need to know it
+        # while the list is still in front of them.
+        lines.append("### Not examined this run")
+        lines.append("")
+        lines += [f"- {said}." for said in shortfall]
         lines.append("")
 
     lines += _waiting(verdict, approvals or {})

@@ -203,6 +203,13 @@ def merge(findings: tuple[Finding, ...]) -> tuple[Finding, ...]:
 
 
 def _stricter(first: Finding, second: Finding) -> Finding:
+    """The two judgements combined, keeping every part the key is built from.
+
+    Every part, because the result is stored under the key it was merged by. Dropping one — `kind`
+    was dropped, silently, from the moment it was added — produces a finding whose own key is not
+    the key it is filed under, so the run reports one problem and tracks another, and next week both
+    of them again.
+    """
     klass = first.klass if first.klass.rank >= second.klass.rank else second.klass
     severity = first.severity if first.severity.rank >= second.severity.rank else second.severity
     winner = first if (first.klass, first.severity) == (klass, severity) else second
@@ -224,4 +231,5 @@ def _stricter(first: Finding, second: Finding) -> Finding:
         # Either task asking for a person is enough. One that saw a reason to hold saw something the
         # other did not, and the cheap way to be wrong here is to ship a move nobody approved.
         needs_unlock=first.needs_unlock or second.needs_unlock,
+        kind=winner.kind or first.kind or second.kind,
     )
