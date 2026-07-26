@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from agent import __version__
+from agent.absence import Absences
 from agent.answer import Aftermath, Answered, answer, deliver, status_for
 from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
@@ -506,12 +507,13 @@ def run(
         # After the report, because the report is what gets published, and outside the event loop
         # because talking to the platform is a subprocess away rather than a coroutine.
         outcomes = tuple(item.outcome for item in executed)
-        escalations, remembered, document = _recall(
+        escalations, remembered, document, absences = _recall(
             request,
             config=config,
             repository=repository,
             outcomes=outcomes,
             run=manifest.run_id,
+            woken=woken,
         )
         _announce(
             request,
@@ -529,6 +531,7 @@ def run(
             escalations=escalations,
             memory=remembered,
             document=document,
+            absences=absences,
             woken=woken,
             asked=performed.read.classification.gist
             if performed.read and performed.read.classification
@@ -942,17 +945,38 @@ def _recall(
     repository: Repository,
     outcomes: tuple[TaskOutcome, ...],
     run: str,
-) -> tuple[tuple[Escalation, ...], Memory | None, dict[str, Any]]:
-    """What earlier runs remember about failing checks, and what this run should remember.
+    woken: Woken | None,
+) -> tuple[tuple[Escalation, ...], Memory | None, dict[str, Any], Absences]:
+    """What earlier runs left for this one, and what this one will leave behind.
 
-    Only a scheduled run keeps this. A run somebody started has that somebody watching its output,
-    so a failure needs no issue to be noticed; the memory exists for the runs nobody reads.
+    Two things live in that memory and they are not remembered under the same condition. Which
+    checks keep failing is only worth counting for the runs nobody reads: a run somebody started has
+    that somebody watching its output, so a repeat needs no issue to be noticed.
+
+    How long a tracked finding has gone unreported is counted by every maintenance run, because it
+    decides whether an issue is closed and that has nothing to do with who is watching. A run
+    started by hand that could close nothing for want of the count would leave the tracker exactly
+    as frozen as the rule this replaced.
+
+    A review writes nothing here, having run on code a stranger proposed.
     """
-    if not request.trigger.is_scheduled:
-        return (), None, {}
+    when = datetime.now(UTC)
+    asked = frozenset({woken.key} if woken is not None and woken.key else ())
+    if not request.trigger.is_maintenance:
+        return (), None, {}, Absences.of({}, outcomes=outcomes, run=run, when=when, asked=asked)
     memory = Memory(repository=repository, ref=config.storage.state_ref)
-    escalations, document = weigh(outcomes, memory=memory.read(), run=run, when=datetime.now(UTC))
-    return escalations, memory, document
+    known = memory.read()
+    escalations, document = (
+        weigh(outcomes, memory=known, run=run, when=when)
+        if request.trigger.is_scheduled
+        else ((), dict(known))
+    )
+    return (
+        escalations,
+        memory,
+        document,
+        Absences.of(known, outcomes=outcomes, run=run, when=when, asked=asked),
+    )
 
 
 def _announce(
@@ -972,6 +996,7 @@ def _announce(
     escalations: tuple[Escalation, ...] = (),
     memory: Memory | None = None,
     document: dict[str, Any] | None = None,
+    absences: Absences | None = None,
     woken: Woken | None = None,
     asked: str = "",
 ) -> None:
@@ -995,10 +1020,13 @@ def _announce(
     caution = caution_for(identity)
 
     if request.trigger.is_maintenance:
+        counted = absences or Absences.of(
+            {}, outcomes=outcomes, run=manifest.run_id, when=datetime.now(UTC)
+        )
         recorded = track_findings(
             platform,
             verdict=verdict,
-            outcomes=outcomes,
+            absences=counted,
             head=repository.head,
             limit=new_issues,
             escalations=escalations,
@@ -1014,12 +1042,15 @@ def _announce(
             # Written after the issues, so a streak is only recorded as continuing once the run has
             # done what the streak is for. A memory stored before the write, in a run that then
             # fails to reach the tracker, would count a run that told nobody anything.
-            stored, failed = memory.write(document or {}, platform=platform, run=manifest.run_id)
+            stored, failed = memory.write(
+                counted.document(document or {}), platform=platform, run=manifest.run_id
+            )
             actions["memory"] = {"ref": memory.ref, "stored": stored, "failure": failed}
             if failed:
                 manifest.warnings.append(
-                    f"which checks keep failing was not remembered ({failed}), so a repeat next "
-                    "week reads as a first failure and is reported to nobody"
+                    f"what this run learnt was not remembered ({failed}): a check that keeps "
+                    "failing will read as a first failure next week and be reported to nobody, and "
+                    "an issue whose finding has gone will wait another run to be closed"
                 )
         proposals: dict[str, tuple[str, str]] = {}
         if any(fix.outcome is FixOutcome.FIXED for fix in fixes):

@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+from agent.absence import Absences
 from agent.backends.fake import FakeBackend, Scripted
 from agent.backends.port import Brief
 from agent.domain import Outcome, Reason, Role, RunResult, Trigger
@@ -35,6 +37,7 @@ from agent.unlock import Approval, granted, held, read, stamped, waiting
 from agent.verdict import Judged, TaskOutcome, Verdict
 from agent.wake import Wake
 
+WHEN = datetime(2026, 7, 25, 9, 0, tzinfo=UTC)
 PERSON = "amsokol"
 COMMENT = 11
 SUMMARY = "jinja2 is a major line behind."
@@ -66,6 +69,21 @@ def a_finding(
         needs_unlock=needs_unlock,
         kind=Kind.OUTDATED,
     )
+
+
+def branches(platform: FakePlatform) -> list[str]:
+    """What the run pushed as work, leaving out the ref it keeps its own memory in.
+
+    A maintenance run counts how long each tracked finding has gone unreported, and that count is a
+    push like any other. It is not a proposal, and a test about whether a change was shipped has no
+    business seeing it.
+    """
+    return [ref for ref in platform.pushed if not ref.startswith("refs/")]
+
+
+def counting(outcomes: tuple[TaskOutcome, ...]) -> Absences:
+    """A first run's worth of absence counting: nothing remembered, nothing yet closable."""
+    return Absences.of({}, outcomes=outcomes, run="run-1", when=WHEN)
 
 
 def a_judged(finding: Finding | None = None) -> Judged:
@@ -181,7 +199,9 @@ def test_the_issue_asks_for_the_one_thing_a_person_can_do_about_it() -> None:
     """An issue is read weeks later by somebody who never saw the run. If it does not say that it is
     waiting, and what saying yes will cause, the hold looks like the agent giving up quietly."""
     platform = FakePlatform()
-    track_findings(platform, verdict=a_verdict(), outcomes=(reported(),), head="abc123", limit=5)
+    track_findings(
+        platform, verdict=a_verdict(), absences=counting((reported(),)), head="abc123", limit=5
+    )
 
     body = platform.tracked[0].body
     assert "Waiting for a person" in body
@@ -198,7 +218,7 @@ def test_an_approved_issue_states_who_said_so_and_stops_asking() -> None:
     track_findings(
         platform,
         verdict=a_verdict(),
-        outcomes=(reported(),),
+        absences=counting((reported(),)),
         head="abc123",
         limit=5,
         approvals={KEY: APPROVAL},
@@ -212,7 +232,7 @@ def test_an_approved_issue_states_who_said_so_and_stops_asking() -> None:
     again = track_findings(
         platform,
         verdict=a_verdict(),
-        outcomes=(reported(),),
+        absences=counting((reported(),)),
         head="abc123",
         limit=5,
         known=tuple(platform.tracked),
@@ -238,7 +258,7 @@ def test_an_approval_is_written_down_even_when_the_check_did_not_finish() -> Non
     record = track_findings(
         platform,
         verdict=Verdict(result=RunResult.INCONCLUSIVE),
-        outcomes=(reported(Outcome.UNVERIFIED, Reason.UNAVAILABLE),),
+        absences=counting((reported(Outcome.UNVERIFIED, Reason.UNAVAILABLE),)),
         head="abc123",
         limit=5,
         approvals={KEY: APPROVAL},
@@ -389,7 +409,7 @@ def test_a_major_move_is_reported_and_the_code_is_left_alone(
         backend=finder(),
     )
 
-    assert not platform.pushed and not platform.proposed
+    assert not branches(platform) and not platform.proposed
     assert "2.11.3" in (git_repo / "pyproject.toml").read_text(encoding="utf-8")
     deferred = {item["finding"]: item["reason"] for item in record.manifest.remediation["deferred"]}
     assert "major move" in deferred[KEY]
@@ -440,9 +460,9 @@ def test_an_approval_on_the_issue_ships_the_change_it_was_holding(
     assert record.manifest.wake["unlocked"]["by"] == PERSON
     assert [job["findings"] for job in record.manifest.remediation["jobs"]] == [[KEY]]
     assert [fix["outcome"] for fix in record.manifest.fixes] == ["fixed"]
-    assert platform.pushed and platform.pushed[0].startswith("agent/routine/")
+    assert branches(platform) and branches(platform)[0].startswith("agent/routine/")
     assert platform.proposed
-    proposal = dict(platform.bodies)[platform.pushed[0]]
+    proposal = dict(platform.bodies)[branches(platform)[0]]
     assert "remediates #7" in proposal
     # The permission is on the issue from now on, so next week's run does not ask again.
     assert read(platform.tracked[0].body) == Approval(
@@ -488,7 +508,7 @@ def test_an_approval_outlives_the_fix_that_failed_under_it(
         backend=finder(fixes=False),
     )
 
-    assert not platform.pushed
+    assert not branches(platform)
     assert read(platform.tracked[0].body) is not None
     status = next(body for key, body in platform.notes if "You asked for this" in body)
     assert "The approval stands" in status
@@ -507,5 +527,5 @@ def test_a_run_that_cannot_read_the_approvals_ships_nothing_that_waits(
         backend=finder(),
     )
 
-    assert not platform.pushed
+    assert not branches(platform)
     assert any("approved could not be read" in warning for warning in record.manifest.warnings)

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from agent.absence import Absences
 from agent.domain import Outcome, Reason, RunResult
 from agent.escalate import Escalation, weigh
 from agent.issues import LABEL, track_findings
@@ -38,6 +39,12 @@ def again(
     outcomes: tuple[TaskOutcome, ...], memory: dict[str, Any], run: str = "run-2"
 ) -> tuple[tuple[Escalation, ...], dict[str, Any]]:
     return weigh(outcomes, memory=memory, run=run, when=WHEN)
+
+
+def counting(outcomes: tuple[TaskOutcome, ...]) -> Absences:
+    """An escalation's issue closes on the run in which the check completes, so an empty memory is
+    all these need: what waits for a second run is a finding's absence, not a check coming back."""
+    return Absences.of({}, outcomes=outcomes, run="run-1", when=WHEN)
 
 
 def test_one_failure_tells_nobody_but_is_remembered() -> None:
@@ -83,7 +90,7 @@ def test_a_check_that_completes_clears_its_streak_and_lets_its_issue_close() -> 
     track_findings(
         platform,
         verdict=Verdict(result=RunResult.INCONCLUSIVE),
-        outcomes=(outcome(),),
+        absences=counting((outcome(),)),
         head=HEAD,
         limit=5,
         escalations=escalations,
@@ -96,7 +103,7 @@ def test_a_check_that_completes_clears_its_streak_and_lets_its_issue_close() -> 
     record = track_findings(
         platform,
         verdict=Verdict(result=RunResult.PASS),
-        outcomes=clean,
+        absences=counting(clean),
         head=HEAD,
         limit=5,
         escalations=left,
@@ -140,7 +147,7 @@ def test_a_repeat_updates_the_issue_it_already_opened() -> None:
     track_findings(
         platform,
         verdict=Verdict(result=RunResult.INCONCLUSIVE),
-        outcomes=(outcome(),),
+        absences=counting((outcome(),)),
         head=HEAD,
         limit=5,
         escalations=twice,
@@ -151,7 +158,7 @@ def test_a_repeat_updates_the_issue_it_already_opened() -> None:
     record = track_findings(
         platform,
         verdict=Verdict(result=RunResult.INCONCLUSIVE),
-        outcomes=(outcome(),),
+        absences=counting((outcome(),)),
         head=HEAD,
         limit=5,
         escalations=thrice,
@@ -174,7 +181,7 @@ def test_a_broken_check_is_told_about_even_when_the_new_issue_limit_is_spent() -
     record = track_findings(
         platform,
         verdict=Verdict(result=RunResult.INCONCLUSIVE),
-        outcomes=(outcome(),),
+        absences=counting((outcome(),)),
         head=HEAD,
         limit=0,
         escalations=escalations,
