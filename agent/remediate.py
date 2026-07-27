@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,9 @@ class FixJob:
     also: tuple[Judged, ...] = field(default_factory=tuple)
     """The rest of the group — same class, same subject, one remediation."""
     branch: str = ""
+    awaiting_ci: bool = False
+    """A person asked for a PR even though this ecosystem has no local verification surface.
+    The change may ship without `verification.passed`; the pull request must say so plainly."""
 
     @property
     def key(self) -> str:
@@ -169,24 +172,11 @@ def plan_fixes(
     `approvals` are the holds a person has already released, read from the issues before anything is
     planned. A finding that waits for somebody and has no approval among them is deferred with the
     reason, every run, until they answer — which is the whole of the guarantee that a major move
-    ships only when it was asked for.
+    ships only when it was asked for. The same stamp also authorises a prepare when the overlay
+    names no verification surface for the finding's ecosystem: the person asked for a pull request
+    so CI can be the proof, and that is not something the agent invents on its own.
     """
     granted = approvals or {}
-    if not overlay.verification:
-        # Named per finding rather than once: the run's report is where a team learns that the
-        # missing `verification` section is why nothing was fixed this week.
-        return Queue(
-            jobs=(),
-            deferred=tuple(
-                (
-                    item.finding.key,
-                    "the overlay names no verification commands, so no fix could be shown to be "
-                    "safe",
-                )
-                for item in _ordered(judged)
-                if _unfixable(item, granted) is None
-            ),
-        )
     jobs: list[FixJob] = []
     deferred: list[tuple[str, str]] = []
     # The subject's branch is stable, so a change request already carrying it is this same fix under
@@ -194,7 +184,7 @@ def plan_fixes(
     # queue counts what is open rather than what this run adds: the limit is on a team's attention.
     open_now = {name for name in proposed if name.startswith(BRANCH_PREFIX)}
     room = max(0, max_open_fix_requests - len(open_now))
-    for group in _grouped(judged, deferred, granted):
+    for group in _grouped(judged, deferred, granted, overlay.verification):
         first, rest = group[0], group[1:]
         branch = branch_for(first)
         if branch in open_now:
@@ -219,6 +209,7 @@ def plan_fixes(
                 judged=first,
                 also=rest,
                 branch=branch,
+                awaiting_ci=_awaits_ci(first, overlay.verification, granted),
             )
         )
     return Queue(jobs=tuple(jobs), deferred=tuple(deferred))
@@ -228,11 +219,12 @@ def _grouped(
     judged: tuple[Judged, ...],
     deferred: list[tuple[str, str]],
     approvals: dict[str, Approval],
+    surfaces: Surfaces,
 ) -> tuple[tuple[Judged, ...], ...]:
     """Fixable findings, one group per class and subject, in the order the run will ship them."""
     groups: dict[tuple[str, str], list[Judged]] = {}
     for item in _ordered(judged):
-        reason = _unfixable(item, approvals)
+        reason = _unfixable(item, approvals, surfaces)
         if reason is not None:
             deferred.append((item.finding.key, reason))
             continue
@@ -257,7 +249,7 @@ def _ordered(judged: tuple[Judged, ...]) -> tuple[Judged, ...]:
     )
 
 
-def _unfixable(item: Judged, approvals: dict[str, Approval]) -> str | None:
+def _unfixable(item: Judged, approvals: dict[str, Approval], surfaces: Surfaces) -> str | None:
     """Why a finding is not a candidate for an automated fix.
 
     Reproducible evidence is required for the same reason it is required to block: acting on "looks
@@ -273,6 +265,13 @@ def _unfixable(item: Judged, approvals: dict[str, Approval]) -> str | None:
     A hold is different from all of them, and its wording says so: nothing is wrong with the finding
     or its evidence, and the run is not giving up on it. It is waiting for a person, and it will
     wait for as many runs as that takes.
+
+    An ecosystem whose overlay names no verification surface is human-only from the start:
+    preparing a fix that cannot be proved would only refuse later with the same information the
+    planner already has. Silence in the overlay is the product's declaration, not a gap to fill by
+    guessing commands. A person with write access may still ask for a pull request on that issue —
+    the same unlock stamp that releases a major — and then this check yields: CI on the PR is the
+    proof they chose, recorded as `awaiting_ci` rather than as local verification.
     """
     if item.reliability is not Reliability.REPRODUCIBLE:
         return "the evidence behind it is heuristic, so a code change would rest on a guess"
@@ -283,10 +282,37 @@ def _unfixable(item: Judged, approvals: dict[str, Approval]) -> str | None:
             "it names no version to move to, so there is nothing to apply — it is reported until "
             "there is one"
         )
+    ecosystem = item.finding.subject.ecosystem
+    if ecosystem:
+        surface = ecosystem.removeprefix("ecosystems/")
+        if surface not in surfaces:
+            if item.finding.key in approvals:
+                return None
+            if not surfaces:
+                return (
+                    "the overlay names no verification commands, so no fix could be shown to be "
+                    "safe locally; the finding is for a person. Comment on its issue to ask for a "
+                    "pull request — CI on that PR is then the proof"
+                )
+            return (
+                f"the overlay names no verification surface for `{surface}`, so a fix cannot be "
+                "shown to be safe locally; the finding is for a person. Comment on its issue to "
+                "ask for a pull request — CI on that PR is then the proof"
+            )
+    elif not surfaces:
+        return "the overlay names no verification commands, so no fix could be shown to be safe"
     hold = waiting(item.finding, approvals)
     if hold:
         return f"{hold}. Nobody has, on its issue, so it waits"
     return None
+
+
+def _awaits_ci(item: Judged, surfaces: Surfaces, approvals: dict[str, Approval]) -> bool:
+    """Whether this job ships without local verification because a person asked for a CI PR."""
+    ecosystem = item.finding.subject.ecosystem
+    if not ecosystem or item.finding.key not in approvals:
+        return False
+    return ecosystem.removeprefix("ecosystems/") not in surfaces
 
 
 def _task(item: Judged, *, library: Library, playbook: str) -> PlannedTask:
@@ -431,9 +457,19 @@ async def _one(
     )
     for attempt in attempted.attempts:
         await ledger.record(attempt.session.usage)
-    verification = check(surfaces, toolkit.calls)
+    verification = check(() if job.awaiting_ci else surfaces, toolkit.calls)
+    if job.awaiting_ci:
+        verification = replace(
+            verification,
+            passed=False,
+            detail=(
+                "a person authorised this pull request without local verification; CI on the "
+                "change request is the proof"
+            ),
+            awaiting_ci=True,
+        )
     changed = tree.dirty()
-    if verification.failed:
+    if verification.failed and not job.awaiting_ci:
         verification = verification.against_base(
             await asyncio.to_thread(already_broken, tree, verification.failed, toolkits, task)
         )
@@ -509,9 +545,15 @@ def _shippable(fix: Fix) -> tuple[FixOutcome, str]:
     Both checks catch the same class of mistake from opposite ends: a session that concluded it was
     done without changing anything, and one that changed something without proving it safe. Either
     way the branch would look ready to merge, which is the most expensive kind of wrong here.
+
+    `awaiting_ci` is the deliberate exception: a person with write access asked for a pull request
+    knowing there is no local surface. The change must still land in the tree; calling it verified
+    is what stays forbidden.
     """
     if not fix.changed:
         return FixOutcome.REFUSED, "reported a fix, but the worktree is unchanged"
+    if fix.job.awaiting_ci:
+        return FixOutcome.FIXED, ""
     if fix.verification is None or not fix.verification.passed:
         detail = fix.verification.detail if fix.verification else "verification was not checked"
         return FixOutcome.REFUSED, f"reported a fix, but {detail}"
@@ -525,6 +567,11 @@ def _settle(fix: Fix, *, tree: Worktree, run: str) -> None:
         return
     finding = fix.job.judged.finding
     surfaces = ", ".join(fix.verification.verified) if fix.verification else ""
+    proof = (
+        "Not verified locally: a person asked for this pull request so CI can check it."
+        if fix.job.awaiting_ci
+        else (f"Verified: {surfaces}" if surfaces else "")
+    )
     message = "\n".join(
         [
             f"{finding.klass.value}: {finding.summary}",
@@ -532,7 +579,7 @@ def _settle(fix: Fix, *, tree: Worktree, run: str) -> None:
             fix.notes,
             "",
             f"Finding{'s' if fix.job.also else ''}: {', '.join(fix.job.keys)}",
-            f"Verified: {surfaces}" if surfaces else "",
+            proof,
             f"Prepared by ai-devsecops-agent in run {run}.",
         ]
     )
@@ -566,6 +613,15 @@ def _given(job: FixJob, surfaces: Surfaces) -> tuple[str, ...]:
             f"- Also on this subject, to fix in the same change ({len(job.also)}): "
             + "; ".join(f"`{item.finding.key}` — {item.finding.remediation}" for item in job.also)
         )
+    if job.awaiting_ci:
+        lines += [
+            "- Local verification: none. A person with write access asked for a pull request so "
+            "CI can check this change. Apply the remediation and report `fixed` when the tree "
+            "matches it; do not invent verification commands.",
+            "- You are working in an isolated copy of the repository. Nothing you do here touches "
+            "the branch under maintenance, and the agent commits what you leave behind.",
+        ]
+        return tuple(lines)
     for surface, commands in sorted(surfaces.items()):
         lines.append(
             f"- Verification surface `{surface}`, in order: "

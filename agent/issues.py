@@ -75,6 +75,7 @@ def track_findings(
     label: str = LABEL,
     known: tuple[Issue, ...] | None = None,
     approvals: dict[str, Approval] | None = None,
+    surfaces: dict[str, tuple[tuple[str, ...], ...]] | None = None,
 ) -> Tracking:
     """Reconcile this run's findings with the issues already open, and record every step.
 
@@ -89,6 +90,10 @@ def track_findings(
     `known` is the open set when the run already read it — a run that plans fixes has to, because
     which holds a person released decides what it may ship. Listing it twice would ask the platform
     the same question either side of the work and let the two answers differ.
+
+    `surfaces` is the overlay's verification map when the caller has one. Absent means the issue
+    body does not claim anything about local proof; an empty map means every ecosystem is
+    human-only unless unlocked for CI.
     """
     record = Tracking()
     try:
@@ -103,6 +108,7 @@ def track_findings(
             label,
             known,
             approvals or {},
+            surfaces,
         )
     except ScmError as error:
         record.failure = str(error)
@@ -120,13 +126,21 @@ def _track(
     label: str,
     known: tuple[Issue, ...] | None,
     approvals: dict[str, Approval],
+    surfaces: dict[str, tuple[tuple[str, ...], ...]] | None,
 ) -> Tracking:
     listed = platform.issues(label=label) if known is None else known
     existing = {item.key: item for item in listed if item.key}
     # Findings and escalations are reconciled by one loop because they are the same kind of thing to
     # a reader: one issue, found again by its key, closed when the check that owns it says so.
     wanted = {
-        item.finding.key: (_title(item), _body(item, approvals.get(item.finding.key)))
+        item.finding.key: (
+            _title(item),
+            _body(
+                item,
+                approvals.get(item.finding.key),
+                no_surface=_no_surface(item, surfaces),
+            ),
+        )
         for item in verdict.judged
     }
     wanted |= {item.key: (item.title, item.body) for item in escalations}
@@ -212,7 +226,12 @@ def _title(judged: Judged) -> str:
     return f"agent: {finding.capability.rsplit('/', 1)[-1]} — {what}"
 
 
-def _body(judged: Judged, approval: Approval | None = None) -> str:
+def _body(
+    judged: Judged,
+    approval: Approval | None = None,
+    *,
+    no_surface: bool = False,
+) -> str:
     """The finding, its evidence, and what to do about it — then the marker.
 
     Written to be read on its own, because an issue is found weeks later by somebody who never saw
@@ -241,11 +260,13 @@ def _body(judged: Judged, approval: Approval | None = None) -> str:
             "This is reported rather than blocking: the evidence behind it is heuristic, and "
             "policy only lets demonstrated findings block.",
         ]
-    lines += _decision(finding, approval)
+    lines += _decision(finding, approval, no_surface=no_surface)
     return marker.stamp("\n".join(lines), finding.key)
 
 
-def _decision(finding: Finding, approval: Approval | None) -> list[str]:
+def _decision(
+    finding: Finding, approval: Approval | None, *, no_surface: bool = False
+) -> list[str]:
     """The one paragraph a person is here to act on, when the finding waits for them.
 
     Both halves are written for somebody arriving at this issue cold: what is being asked, and what
@@ -253,6 +274,15 @@ def _decision(finding: Finding, approval: Approval | None) -> list[str]:
     agent reads on later runs, so the question is asked exactly once.
     """
     if approval is not None:
+        if no_surface:
+            return [
+                "",
+                f"**{approval.sentence}** A run will prepare the change **without local "
+                "verification** and open it for review — CI on that pull request is the proof you "
+                "asked for; this issue stays open until that is merged.",
+                "",
+                render(approval),
+            ]
         return [
             "",
             f"**{approval.sentence}** A run will prepare the change, verify it and open it for "
@@ -261,6 +291,20 @@ def _decision(finding: Finding, approval: Approval | None) -> list[str]:
             render(approval),
         ]
     hold = held(finding)
+    if no_surface:
+        why = (
+            f"because {hold}"
+            if hold
+            else "because this product has no verification surface that can prove a fix for it"
+        )
+        return [
+            "",
+            f"**Waiting for a person.** This will not be changed automatically, {why}.",
+            "",
+            "Comment here to ask for a pull request — plain words, no phrase to match — and the "
+            "next run prepares the change without local verification so CI on that PR can check "
+            "it. Until then every run reports it and leaves the code alone.",
+        ]
     if not hold:
         return []
     return [
@@ -271,6 +315,17 @@ def _decision(finding: Finding, approval: Approval | None) -> list[str]:
         "the change, verifies it against this product's own commands and opens it for review. "
         "Until then every run reports it and leaves the code alone.",
     ]
+
+
+def _no_surface(
+    judged: Judged, surfaces: dict[str, tuple[tuple[str, ...], ...]] | None
+) -> bool:
+    if surfaces is None:
+        return False
+    ecosystem = judged.finding.subject.ecosystem
+    if not ecosystem:
+        return not surfaces
+    return ecosystem.removeprefix("ecosystems/") not in surfaces
 
 
 def _subject(judged: Judged) -> str:

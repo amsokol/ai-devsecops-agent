@@ -64,9 +64,11 @@ makes it in a scratch checkout can run the product's own verification over it fi
 committed: what a `patch` course publishes is a comment, and the change in it is applied by the
 person or not at all.
 
-`unlock` rechecks. Nothing in the agent yet marks a finding as held awaiting a person, so there is
-no hold to release: what an unlock means today is "look at this finding now", which is what a
-recheck does. When holds exist, releasing one is added here rather than anywhere else.
+`unlock` rechecks. When the finding was held for a person — a major move, or an ecosystem with no
+local verification surface — the same course also records the approval so this run (and later ones)
+may prepare the change. For a missing surface the prepare is without local verification: the person
+asked for a pull request so CI can check it, and that is written on the PR rather than claimed as
+`verified`.
 
 `unrelated` deliberately writes nothing at all. A machine that answers "you're welcome" is a machine
 people mute.

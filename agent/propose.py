@@ -128,17 +128,25 @@ def _body(fix: Fix, *, issues: Mapping[str, int], run: str) -> str:
         where = f" — remediates #{number}" if number else ""
         lines.append(f"- `{item.finding.key}`{where}")
     if fix.verification is not None:
-        surfaces = ", ".join(f"`{name}`" for name in fix.verification.verified)
-        lines += ["", f"**Verified.** {surfaces or 'nothing was recorded as run'}"]
-        if fix.verification.pre_existing:
-            already = ", ".join(
-                f"`{' '.join(command)}`" for command in fix.verification.pre_existing
-            )
-            lines.append(
-                f"These were already failing on the base commit, before this change: {already}. "
-                "They are the product's own to fix; this change neither works around them nor "
-                "touches them."
-            )
+        if fix.verification.awaiting_ci or fix.job.awaiting_ci:
+            lines += [
+                "",
+                "**Not verified locally.** A person with write access asked for this pull request "
+                "so CI can check the change. Treat green checks on this PR as the proof; do not "
+                "read this as a locally verified fix.",
+            ]
+        else:
+            surfaces = ", ".join(f"`{name}`" for name in fix.verification.verified)
+            lines += ["", f"**Verified.** {surfaces or 'nothing was recorded as run'}"]
+            if fix.verification.pre_existing:
+                already = ", ".join(
+                    f"`{' '.join(command)}`" for command in fix.verification.pre_existing
+                )
+                lines.append(
+                    "These were already failing on the base commit, before this change: "
+                    f"{already}. They are the product's own to fix; this change neither works "
+                    "around them nor touches them."
+                )
     if fix.changed:
         lines += ["", "**Files.** " + ", ".join(f"`{name}`" for name in fix.changed)]
     lines += [

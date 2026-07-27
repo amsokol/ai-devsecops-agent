@@ -42,6 +42,8 @@ class Verification:
     detail: str = ""
     pre_existing: tuple[tuple[str, ...], ...] = ()
     """Failing commands that fail on the unchanged head too, so the fix did not cause them."""
+    awaiting_ci: bool = False
+    """A person authorised a pull request with no local surface; CI on that PR is the proof."""
 
     @property
     def attempted(self) -> tuple[str, ...]:
@@ -64,6 +66,7 @@ class Verification:
             "ran": [item.as_json() for item in self.ran],
             "pre_existing": [list(command) for command in self.pre_existing],
             "detail": self.detail,
+            "awaiting_ci": self.awaiting_ci,
         }
 
     def against_base(self, pre_existing: tuple[tuple[str, ...], ...]) -> Verification:

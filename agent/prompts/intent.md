@@ -18,10 +18,12 @@ quoted in the task section.
 | `recheck` | look again — they believe the situation has changed since the remark |
 | `unrelated` | nothing from the agent: thanks, a note to a colleague, an aside |
 
-Two of these are easy to confuse and the difference matters. `unlock` is somebody *permitting* the
-change the agent asked about — "approved", "go ahead", "do it", "ship it". `recheck` is somebody
-saying the *facts* changed — "I bumped it already", "this is fixed now", "look again". Permission is
-not news, and news is not permission.
+Two of these are easy to confuse and the difference matters. `unlock` is somebody *permitting*
+the change the agent said it was holding back — "approved", "go ahead", "do it", "ship it",
+"make a PR", "open a pull request so CI can check it". That includes the case where the issue
+said there is no local verification: they are asking for a PR whose CI is the proof, not for the
+agent to invent a check. `recheck` is somebody saying the *facts* changed — "I bumped it already",
+"this is fixed now", "look again". Permission is not news, and news is not permission.
 
 `fix` rather than `question` when they want the change itself, not the reasoning: "how do I fix
 this?", "can you do it?", "what would the patch look like?".

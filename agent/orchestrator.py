@@ -539,6 +539,7 @@ def run(
             new_issues=overlay.queue.max_new_issues_per_run,
             tracked=tracked,
             approvals=approvals,
+            surfaces=overlay.verification,
             escalations=escalations,
             memory=remembered,
             document=document,
@@ -1010,6 +1011,7 @@ def _announce(
     new_issues: int,
     tracked: tuple[Issue, ...] | None = None,
     approvals: dict[str, Approval] | None = None,
+    surfaces: dict[str, tuple[tuple[str, ...], ...]] | None = None,
     escalations: tuple[Escalation, ...] = (),
     memory: Memory | None = None,
     document: dict[str, Any] | None = None,
@@ -1049,6 +1051,7 @@ def _announce(
             escalations=escalations,
             known=tracked,
             approvals=approvals,
+            surfaces=surfaces,
         )
         actions["issues"] = recorded.as_json()
         if escalations:

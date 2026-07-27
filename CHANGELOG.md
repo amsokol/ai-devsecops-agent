@@ -13,6 +13,22 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract range.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
+## 0.2.0 — 2026-07-27
+
+Pins knowledge library `0.5.2` (contract version 2). Behaviour change in the fix queue: a product
+that relied on the agent attempting fixes for ecosystems with no verification surface will see those
+findings deferred instead, unless a person unlocks a CI pull request on the issue.
+
+### Changed
+
+- An enabled ecosystem with no overlay verification surface is human-only from planning time: no
+  fixer session is started, and the deferred reason says a person may comment to ask for a pull
+  request. The same unlock stamp that releases a major hold authorises that prepare; the branch
+  ships as `awaiting_ci` and the change request states that CI on the PR is the proof — never as
+  locally verified.
+- Issue bodies for those findings ask for a pull request rather than only for a verified fix. Intent
+  classification treats "make a PR" / "open a pull request so CI can check it" as `unlock`.
+
 ## 0.1.0 — 2026-07-26
 
 First release of the runner. Pins knowledge library `0.5.1` (contract version 2).

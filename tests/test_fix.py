@@ -63,11 +63,20 @@ quarantine:
   days: 7
 """
 
+OTHER_ECOSYSTEM_ONLY = (
+    NO_VERIFICATION
+    + """\
+verification:
+  cargo:
+    - [cargo, --version]
+"""
+)
+
 VERIFY = ("uv", "--version")
 SECOND = ("uv", "cache", "dir")
 BROKEN = ("uv", "--no-such-option")
-SURFACES: Surfaces = {"python": (VERIFY,), "broken": (BROKEN,)}
-PAIRED: Surfaces = {"python": (VERIFY, SECOND)}
+SURFACES: Surfaces = {"python-uv": (VERIFY,), "broken": (BROKEN,)}
+PAIRED: Surfaces = {"python-uv": (VERIFY, SECOND)}
 ONLY_RED_WHEN_CHANGED = (
     "python3",
     "-c",
@@ -109,6 +118,14 @@ def judged(
 
 def without_verification(root: Path, library: Library, overlay: Overlay) -> Overlay:
     (root / "agent.yaml").write_text(NO_VERIFICATION, encoding="utf-8")
+    return Overlay.load(root, library=library, notes_limit=100_000)
+
+
+def with_verification_for_another_ecosystem(
+    root: Path, library: Library, overlay: Overlay
+) -> Overlay:
+    del overlay  # same trigger/notes path as the fixture; only the values file changes
+    (root / "agent.yaml").write_text(OTHER_ECOSYSTEM_ONLY, encoding="utf-8")
     return Overlay.load(root, library=library, notes_limit=100_000)
 
 
@@ -299,6 +316,48 @@ def test_without_verification_commands_nothing_can_be_fixed(
     )
     assert queue.jobs == ()
     assert "no verification commands" in dict(queue.deferred)[judged().finding.key]
+    assert "pull request" in dict(queue.deferred)[judged().finding.key]
+
+
+def test_without_a_surface_for_the_ecosystem_the_finding_is_human_only(
+    library: Library, overlay: Overlay, overlay_root: Path, git_repo: Path
+) -> None:
+    """Omitting one ecosystem's surface is how a product says do not fix those findings."""
+    partial = with_verification_for_another_ecosystem(overlay_root, library, overlay)
+    queue = plan_fixes(
+        (judged(),),
+        library=library,
+        overlay=partial,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        max_open_fix_requests=5,
+    )
+    assert queue.jobs == ()
+    reason = dict(queue.deferred)[judged().finding.key]
+    assert "no verification surface for `python-uv`" in reason
+    assert "pull request" in reason
+
+
+def test_an_approval_lets_a_human_only_finding_prepare_a_ci_pr(
+    library: Library, overlay: Overlay, overlay_root: Path, git_repo: Path
+) -> None:
+    """A write-access unlock on the issue is how a person asks for a PR when there is no surface."""
+    from agent.unlock import Approval
+
+    partial = with_verification_for_another_ecosystem(overlay_root, library, overlay)
+    item = judged()
+    queue = plan_fixes(
+        (item,),
+        library=library,
+        overlay=partial,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        max_open_fix_requests=5,
+        approvals={item.finding.key: Approval(by="alice", comment=7, at="2026-07-27")},
+    )
+    assert len(queue.jobs) == 1
+    assert queue.jobs[0].awaiting_ci is True
+    assert queue.deferred == ()
 
 
 def _apply(
@@ -548,7 +607,7 @@ def test_a_failure_the_change_caused_stays_the_change_s_own(
         git_repo=git_repo,
         tmp_path=tmp_path,
         findings=(judged(),),
-        surfaces={"python": (ONLY_RED_WHEN_CHANGED,)},
+        surfaces={"python-uv": (ONLY_RED_WHEN_CHANGED,)},
         binaries=frozenset({"uv", "python3"}),
     )[0]
     assert fix.outcome is FixOutcome.REFUSED
