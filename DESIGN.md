@@ -936,8 +936,9 @@ Decisions that used to be open questions; details are in the named sections.
 Defects and gaps that surfaced on live runs of the demo repositories (`amsokol/ai-devsecops-demo`,
 `amsokol/ai-devsecops-demo2`). The list is kept so findings do not dissolve between sessions; order is
 by the cost of the mistake for whoever trusts the agent. Each item names the observation, the cause
-in the current design, and the direction of the fix. What is fixed is removed from here into the
-CHANGELOG.
+in the current design, and the direction of the fix. When an item (or part of one) ships, it stays
+here marked **Done in agent X.Y.Z** (and the library version when the knowledge half mattered);
+the CHANGELOG carries the release note.
 
 **1. False issue close and drifting finding sets from incomplete enumeration.** A run closed an issue
 about `Swatinem/rust-cache@v2` with the wording "the capability finished and this finding is no longer
@@ -959,20 +960,21 @@ The promise "one subject — one ticket, updated in place" holds only while the 
 disappeared. Direction: reconciliation (5.8) searches by key among closed issues too, and reopens a
 returning finding with a comment that it returned.
 
-**3. A fix PR has a lifecycle.** An open agent PR on the stable subject branch means the finding is
-already under review: the run does not prepare a second branch and does not silently push a newer
-target onto that PR when the finding's `Moves to` has advanced — it comments on the **issue** with
-the PR link (and names the current target when it differs), idempotently per open PR number. A
-**closed** PR with an abandoned `agent/…` tip is different: the agent notes on the closed CR that a
-new attempt will follow, deletes the abandoned refs (local and remote — not a force-push over the
-old tip), recreates the branch from the current default, and opens a **new** PR. Unlock stamps on
-the issue authorise the subject, not the tip of the old PR. See the maintain playbook's Fix branches
-section.
+**3. A fix PR has a lifecycle.** **Done in agent 0.2.1 (library 0.5.3).** An open agent PR on the
+stable subject branch means the finding is already under review: the run does not prepare a second
+branch and does not silently push a newer target onto that PR when the finding's `Moves to` has
+advanced — it comments on the **issue** with the PR link (and names the current target when it
+differs), idempotently per open PR number. A **closed** PR with an abandoned `agent/…` tip is
+different: the agent notes on the closed CR that a new attempt will follow, deletes the abandoned
+refs (local and remote — not a force-push over the old tip), recreates the branch from the current
+default, and opens a **new** PR. Unlock stamps on the issue authorise the subject, not the tip of
+the old PR. See the maintain playbook's Fix branches section.
 
-**4. Refusal and "already under review" reach the platform.** Reasons that used to live only in the
-run report ("already under review", abandoned tip, human-only surface) are written where a person
-looks: an issue comment pointing at the open PR, or a note on the closed CR before recreate. Deferred
-queue entries remain in the manifest; the issue is no longer silent about why nothing moved.
+**4. Refusal and "already under review" reach the platform.** **Done in agent 0.2.1
+(library 0.5.3).** Reasons that used to live only in the run report ("already under review", abandoned
+tip, human-only surface) are written where a person looks: an issue comment pointing at the open PR,
+or a note on the closed CR before recreate. Deferred queue entries remain in the manifest; the issue
+is no longer silent about why nothing moved.
 
 **5. A multi-part finding hits the new-issue ceiling.** One `urllib3` pin brought nine advisories: five
 issues filed, four deferred to the next run. The ceiling counts findings, not subjects, so one bad
