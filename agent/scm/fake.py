@@ -69,6 +69,12 @@ class FakePlatform:
     notes: list[tuple[str, str]] = field(default_factory=list)
     labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
     proposed: list[Proposal] = field(default_factory=list)
+    closed_proposals: list[Proposal] = field(default_factory=list)
+    """Closed change requests, newest first for a given head when testing recreate."""
+    remote_branches: set[str] = field(default_factory=set)
+    """Branch tips still on the fake remote — what `has_remote_branch` / `delete_branch` touch."""
+    change_notes: list[tuple[int, str]] = field(default_factory=list)
+    """Comments left on change requests, by number."""
     pushed: list[str] = field(default_factory=list)
     bodies: list[tuple[str, str]] = field(default_factory=list)
     unpushable: tuple[str, ...] = ()
@@ -221,6 +227,11 @@ class FakePlatform:
         self.notes.append((issue.key, body))
         self.calls.append(Call("note", key=issue.key, detail=body))
 
+    def issue_comment_bodies(self, number: int) -> tuple[str, ...]:
+        self._check()
+        key = next((item.key for item in self.tracked if item.number == number), "")
+        return tuple(body for item_key, body in self.notes if item_key == key)
+
     def close_issue(self, issue: Issue) -> None:
         self._check()
         self.tracked = [item for item in self.tracked if item.number != issue.number]
@@ -231,12 +242,34 @@ class FakePlatform:
         self._check()
         return tuple(item for item in self.proposed if item.head.startswith(prefix))
 
+    def closed_on(self, head: str) -> Proposal | None:
+        self._check()
+        for item in self.closed_proposals:
+            if item.head == head:
+                return item
+        return None
+
+    def note_change(self, number: int, body: str) -> None:
+        self._check()
+        self.change_notes.append((number, body))
+        self.calls.append(Call("note_change", detail=str(number)))
+
+    def has_remote_branch(self, name: str) -> bool:
+        self._check()
+        return name in self.remote_branches
+
+    def delete_branch(self, name: str) -> None:
+        self._check()
+        self.remote_branches.discard(name)
+        self.calls.append(Call("delete_branch", detail=name))
+
     def push(self, path: Path, *, source: str, target: str) -> None:
         self._check()
         name = target.removeprefix("refs/heads/")
         if name in self.unpushable:
             raise ScmError(f"pushing {name} failed: it is not a fast-forward")
         self.pushed.append(name)
+        self.remote_branches.add(name)
         self.calls.append(Call("push", detail=name))
 
     def propose(self, new: NewChange) -> Proposal:

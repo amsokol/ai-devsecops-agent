@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from agent.findings import Finding, Klass
+from agent.findings import Finding, Kind, Klass
 from agent.scm.port import Issue
 from agent.tools.versions import Step, compare_versions
 
@@ -94,15 +94,52 @@ def granted(issues: tuple[Issue, ...]) -> dict[str, Approval]:
     return found
 
 
+def is_routine_quarantine(finding: Finding) -> bool:
+    """Whether this finding waits on the quarantine clock, not on a person.
+
+    The knowledge forbids mixing the human-only unlock footer onto these: a comment cannot waive a
+    routine window. Detection is by `kind`, which is also the last segment of the finding key when
+    there is no advisory — so a wake that only has the key can refuse the same way.
+    """
+    return finding.kind is Kind.QUARANTINE
+
+
+def is_routine_quarantine_key(key: str) -> bool:
+    """Key-shaped half of `is_routine_quarantine`, for a wake that has not re-loaded the finding."""
+    return bool(key) and key.rsplit(":", 1)[-1] == "quarantine"
+
+
+def refuse_unlock(key: str) -> str | None:
+    """Why an unlock comment must not be granted, or `None` when it may.
+
+    Routine quarantine is the clock. Granting a stamp would either break the window on the next
+    prepare or leave a person thinking they were ignored. Refusal is the only honest answer.
+    """
+    if not is_routine_quarantine_key(key):
+        return None
+    return (
+        "No. This finding is waiting for the quarantine window to clear. A comment cannot waive a "
+        "routine quarantine wait — that is the clock, not a hold a person releases. When the "
+        "window clears, a later run will act without needing this approval."
+    )
+
+
 def held(finding: Finding) -> str:
     """Why this finding may not ship without a person, or an empty string when it may.
 
     A security remediation is never held by the arithmetic. The library allows one to carry a major
     move precisely because waiting is the greater risk there, and a hold the agent invented would
     park an advisory fix behind a question nobody was asked to answer. A task may still declare one:
-    that is somebody's judgement about this repository, and it is honoured.
+    that is somebody's judgement about this repository, and it is honoured — and on a security
+    finding that declaration is the quarantine exception the knowledge requires when the only fixed
+    version is still inside the window.
     """
     if finding.needs_unlock:
+        if finding.klass is Klass.SECURITY:
+            return (
+                "the only fixed version is still inside the quarantine window, and adopting it "
+                "needs a person's security exception — fixing the advisory outweighs waiting"
+            )
         return "the check that found it reports that this needs a person's approval before it ships"
     if finding.klass is Klass.SECURITY:
         return ""

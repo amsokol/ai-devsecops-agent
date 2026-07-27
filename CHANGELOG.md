@@ -13,6 +13,26 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract range.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
+## 0.2.1 — 2026-07-27
+
+Pins knowledge library `0.5.3` (contract version 2). Behaviour change on quarantine findings and on
+fix-branch lifecycle when a pull request is already open or was closed.
+
+### Changed
+
+- A `kind: quarantine` finding's issue says **Waiting for quarantine**, not waiting for a person, even
+  when the overlay has no verification surface. An unlock comment on that issue is refused without a
+  stamp and without a recheck; the reply says the agent will not prepare a change while the window
+  holds. Approvals do not put routine quarantine on the fix queue.
+- A security finding with `needs_unlock` (only fixed version still inside quarantine) offers unlock as
+  an explicit security exception — advisory outweighs the window — and a grant prepares as before
+  (local verify or `awaiting_ci`).
+- Open fix PR: comment on the finding's issue with the PR link (and drifted `Moves to` when it
+  differs); do not prepare a second branch or silently retarget the open PR. Closed/abandoned
+  `agent/…` tip: note on the closed CR, delete the refs, recreate from default, open a **new** PR.
+- [`DESIGN.md`](DESIGN.md) Found in operation records enumeration gaps, drifting `Moves to`, and
+  cleared-target-vs-clock-only footer (items 1, 9, 10).
+
 ## 0.2.0 — 2026-07-27
 
 Pins knowledge library `0.5.2` (contract version 2). Behaviour change in the fix queue: a product

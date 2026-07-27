@@ -565,6 +565,11 @@ any other. After that everything is deterministic: the agent stamps the permissi
 (who, which comment, when), re-checks the finding, prepares and verifies the edit, pushes a branch and
 opens a pull request linking the issue, and writes on the same issue how it ended.
 
+Routine quarantine (`kind: quarantine`) is not that path. The issue says it waits on the clock, not
+on a person; an unlock comment is refused without a stamp. The exception is a security finding whose
+only fixed version is still inside the window: the task sets `needs_unlock`, the issue offers unlock
+as a quarantine exception (advisory outweighs the window), and a grant then prepares the change.
+
 The stamp lives in the issue body, not in the agent's own memory, because that is where the person
 gave permission: "who approved this" should be a question for a reader of the issue, not for someone
 with console access. It also survives failure: an edit that failed verification is retried next week
@@ -928,20 +933,25 @@ Decisions that used to be open questions; details are in the named sections.
 
 ## 15. Found in operation
 
-Defects and gaps that surfaced on live runs of the demo repository `amsokol/ai-devsecops-demo`. The
-list is kept so findings do not dissolve between sessions; order is by the cost of the mistake for
-whoever trusts the agent. Each item names the observation, the cause in the current design, and the
-direction of the fix. What is fixed is removed from here into the CHANGELOG.
+Defects and gaps that surfaced on live runs of the demo repositories (`amsokol/ai-devsecops-demo`,
+`amsokol/ai-devsecops-demo2`). The list is kept so findings do not dissolve between sessions; order is
+by the cost of the mistake for whoever trusts the agent. Each item names the observation, the cause
+in the current design, and the direction of the fix. What is fixed is removed from here into the
+CHANGELOG.
 
-**1. False issue close from incomplete enumeration.** A run closed an issue about
-`Swatinem/rust-cache@v2` with the wording "the capability finished and this finding is no longer among
-its results", although the pin remained in `.github/workflows/ci.yml` on the default branch; the next
-run filed an issue with the same key. The cause is that the coverage gate (5.7) checks that the
-capability did look at the subject, but the pin list itself is built by the model, and its miss is
-indistinguishable from disappearance of the problem. Direction: subject enumeration must become a
-deterministic agent tool — from the files and patterns the ecosystem declares — and absence may count
-only for subjects that list contains and for which a fact appeared in the run. Until that tool exists,
-absence of a finding on a subject that used to be on the list must not count as proof.
+**1. False issue close and drifting finding sets from incomplete enumeration.** A run closed an issue
+about `Swatinem/rust-cache@v2` with the wording "the capability finished and this finding is no longer
+among its results", although the pin remained in `.github/workflows/ci.yml` on the default branch; the
+next run filed an issue with the same key. On `demo2`, two consecutive github-actions outdated runs
+over the same tree each reported three findings but **different packages** — a fourth issue appeared
+only on the later wake. The cause is that the coverage gate (5.7) checks that the capability did look
+at a subject when deciding closures, but the pin list itself is built by the model, and a miss is
+indistinguishable from disappearance of the problem (and a short sweep still publishes whatever it
+did find). Direction: subject enumeration must become a deterministic agent tool — from the files and
+patterns the ecosystem declares — and a incomplete census must fail the task rather than ship a
+partial finding list. Until that tool exists, absence of a finding on a subject that used to be on
+the list must not count as proof, and coverage shortfalls should be loud enough that a partial raise
+is not mistaken for a full sweep. The knowledge half is in the library design, section 16.
 
 **2. A returning finding opens a new issue instead of reopening the old one.** The finding key is the
 same, but the issue is different: the thread, edit history and human comments stay in the closed one.
@@ -949,18 +959,20 @@ The promise "one subject — one ticket, updated in place" holds only while the 
 disappeared. Direction: reconciliation (5.8) searches by key among closed issues too, and reopens a
 returning finding with a comment that it returned.
 
-**3. A fix PR has no lifecycle.** The PR stays open after its finding was closed and filed again;
-neither closing the issue nor the finding's return affects it, and nothing stops the next run from
-preparing a second branch for the same subject. Direction: the PR is marked with the finding key, so
-its state is derivable — finding gone means the PR is closed with an explanation; finding returned
-means the existing PR is reused or explicitly linked to the new issue.
+**3. A fix PR has a lifecycle.** An open agent PR on the stable subject branch means the finding is
+already under review: the run does not prepare a second branch and does not silently push a newer
+target onto that PR when the finding's `Moves to` has advanced — it comments on the **issue** with
+the PR link (and names the current target when it differs), idempotently per open PR number. A
+**closed** PR with an abandoned `agent/…` tip is different: the agent notes on the closed CR that a
+new attempt will follow, deletes the abandoned refs (local and remote — not a force-push over the
+old tip), recreates the branch from the current default, and opens a **new** PR. Unlock stamps on
+the issue authorise the subject, not the tip of the old PR. See the maintain playbook's Fix branches
+section.
 
-**4. Refusal to fix does not reach the platform.** The reason for refusal ("none of the overlay's
-verification commands ran in this task", "the overlay has no verification surface for this ecosystem")
-is written only to the run report and manifest, and `issues.py` knows nothing about the fix phase. A
-person sees the issue and does not understand why the work did not move — even though that refusal is
-exactly the most valuable thing the agent said. Direction: a comment on the issue with the reason,
-idempotent by run key, so repeated runs do not multiply the same messages.
+**4. Refusal and "already under review" reach the platform.** Reasons that used to live only in the
+run report ("already under review", abandoned tip, human-only surface) are written where a person
+looks: an issue comment pointing at the open PR, or a note on the closed CR before recreate. Deferred
+queue entries remain in the manifest; the issue is no longer silent about why nothing moved.
 
 **5. A multi-part finding hits the new-issue ceiling.** One `urllib3` pin brought nine advisories: five
 issues filed, four deferred to the next run. The ceiling counts findings, not subjects, so one bad
@@ -987,6 +999,27 @@ Direction: a maintenance run must evaluate every current pin against `check_quar
 the versions it might move to, and turn a not-cleared current pin into a published finding (issue)
 without "fixing" it by adopting a newer version that is also inside the window. The knowledge half
 of the same gap is in the library design, section 16.
+
+**9. `Moves to` / concrete target drifts when a model re-picks the version.** On `demo2`, unlock of
+floating `eclipse-temurin` rechecked the finding and changed `target` from `25.0.3_9-jdk` (first
+maintain) to `25.0.2_10-jdk` after a narrow registry query; the issue was rewritten and the fixer
+pinned the older tag — CI then failed on that image while `main`'s channel tag had been green. The
+fixer did what the fresh finding asked; the defect is that choosing the newest quarantine-cleared
+candidate is still model judgement over ad-hoc HTTP, not agent arithmetic. A stronger model reduces
+how often this happens; it does not make two runs agree. Direction: a deterministic tool lists
+candidates and selects the newest cleared version; the analyst may classify the problem and must not
+invent which concrete tag wins. Pair with the open-PR notice when `Moves to` advances under review
+(item 3). The knowledge half is in the library design, section 16.
+
+**10. Cleared target named, but unlock and footer still say "wait for quarantine".** On `demo2`
+issue #4 (`actions/checkout@v7` → resolved `v7.0.1` in window), remediation and `Moves to` already
+pointed at cleared `v7.0.0`, yet the published issue used the routine quarantine footer (clock-only,
+refuse PR comments) and `_unfixable` deferred the finding as waived-only-by-time. That blocks the
+safe remediation the finding itself proposed. Direction: when `target` is a quarantine-cleared
+version, treat the work as that move (floating→concrete / pin-down), not as "wait until the newer tip
+clears"; keep the in-window tip in pending quarantine reporting. Clock-only refuse remains for
+findings with no cleared candidate. Depends on reliable target selection (item 9). The knowledge half
+is in the library design, section 16.
 
 ## 16. Planned: trust surfaces
 

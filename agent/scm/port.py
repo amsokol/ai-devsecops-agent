@@ -346,6 +346,9 @@ class Platform(Protocol):
     def note(self, issue: Issue, body: str) -> None:
         """Say something on the issue. Every closure says why before it happens."""
 
+    def issue_comment_bodies(self, number: int) -> tuple[str, ...]:
+        """Comment bodies on an issue, for idempotent notices (open-PR pointer, etc.)."""
+
     def close_issue(self, issue: Issue) -> None: ...
 
     def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
@@ -353,6 +356,28 @@ class Platform(Protocol):
 
         Asked before any fix is prepared. A run that cannot see what it already has open is a run
         that opens a second change request carrying the same edit.
+        """
+
+    def closed_on(self, head: str) -> Proposal | None:
+        """The newest closed change request that carried this branch, or `None`.
+
+        Used only when recreating an abandoned fix branch: the agent comments there that a new
+        attempt will follow, then deletes the refs. An open proposal is found through `proposals`.
+        """
+
+    def note_change(self, number: int, body: str) -> None:
+        """Comment on a change request (open or closed). Pull requests share the issues comments API
+        on GitHub; the port names the intent so a call site does not pretend it is editing an issue.
+        """
+
+    def has_remote_branch(self, name: str) -> bool:
+        """Whether the hosting platform still has this branch tip."""
+
+    def delete_branch(self, name: str) -> None:
+        """Remove the agent's abandoned branch on the platform.
+
+        Idempotent when the ref is already gone. Never used against a branch that still has an open
+        change request — that path comments on the issue and leaves the PR alone.
         """
 
     def push(self, path: Path, *, source: str, target: str) -> None:

@@ -33,9 +33,10 @@ from agent.library import Library
 from agent.overlay import Overlay
 from agent.repo import Repository, Worktree
 from agent.results import FixResult, read_fix_result
+from agent.scm.port import Proposal
 from agent.toolkit import Toolkits
 from agent.tools import NotPermitted
-from agent.unlock import Approval, waiting
+from agent.unlock import Approval, is_routine_quarantine, waiting
 from agent.verdict import Judged
 from agent.verification import Surfaces, Verification, check
 
@@ -119,6 +120,10 @@ class Queue:
     jobs: tuple[FixJob, ...]
     deferred: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     """Findings that will not be fixed now, each with the reason, so nothing disappears silently."""
+    awaiting_review: tuple[tuple[str, Proposal], ...] = field(default_factory=tuple)
+    """Findings deferred because an open change request already carries their branch: each pair is
+    `(finding key, Proposal)`. Publish uses this to comment on the issue; the PR itself is not
+    rewritten."""
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -127,6 +132,14 @@ class Queue:
                 for job in self.jobs
             ],
             "deferred": [{"finding": key, "reason": reason} for key, reason in self.deferred],
+            "awaiting_review": [
+                {
+                    "finding": key,
+                    "change": proposal.number,
+                    "reference": proposal.reference,
+                }
+                for key, proposal in self.awaiting_review
+            ],
         }
 
 
@@ -156,6 +169,7 @@ def plan_fixes(
     repository: Repository,
     max_open_fix_requests: int,
     proposed: tuple[str, ...] = (),
+    open_proposals: dict[str, Proposal] | None = None,
     approvals: dict[str, Approval] | None = None,
 ) -> Queue:
     """Which findings this run will try to fix, in the order it will ship them.
@@ -175,24 +189,35 @@ def plan_fixes(
     ships only when it was asked for. The same stamp also authorises a prepare when the overlay
     names no verification surface for the finding's ecosystem: the person asked for a pull request
     so CI can be the proof, and that is not something the agent invents on its own.
+
+    `open_proposals` maps branch name to the open change request on it. When set, a subject whose
+    branch is already under review is deferred and listed in `awaiting_review` so publish can point
+    the issue at that PR — without rewriting the PR when the finding's target has moved on.
     """
     granted = approvals or {}
+    by_head = open_proposals or {}
     jobs: list[FixJob] = []
     deferred: list[tuple[str, str]] = []
+    awaiting: list[tuple[str, Proposal]] = []
     # The subject's branch is stable, so a change request already carrying it is this same fix under
     # review. Reopening it as a second one is the noise this whole phase exists to avoid, and the
     # queue counts what is open rather than what this run adds: the limit is on a team's attention.
-    open_now = {name for name in proposed if name.startswith(BRANCH_PREFIX)}
+    open_now = {name for name in proposed if name.startswith(BRANCH_PREFIX)} | {
+        name for name in by_head if name.startswith(BRANCH_PREFIX)
+    }
     room = max(0, max_open_fix_requests - len(open_now))
     for group in _grouped(judged, deferred, granted, overlay.verification):
         first, rest = group[0], group[1:]
         branch = branch_for(first)
         if branch in open_now:
             _defer(deferred, group, f"branch {branch} is already under review")
+            proposal = by_head.get(branch)
+            if proposal is not None:
+                awaiting += [(item.finding.key, proposal) for item in group]
             continue
         if repository.has_branch(branch):
-            # An abandoned branch from an earlier run in this same checkout. Leaving it alone never
-            # destroys work, and pushing over it would be a force-push by another name.
+            # An abandoned branch that reclaim did not clear (or a parallel checkout). Leaving it
+            # alone never destroys work; the next run that can reclaim will.
             _defer(deferred, group, f"branch {branch} already exists")
             continue
         if len(jobs) >= room:
@@ -212,7 +237,11 @@ def plan_fixes(
                 awaiting_ci=_awaits_ci(first, overlay.verification, granted),
             )
         )
-    return Queue(jobs=tuple(jobs), deferred=tuple(deferred))
+    return Queue(
+        jobs=tuple(jobs),
+        deferred=tuple(deferred),
+        awaiting_review=tuple(awaiting),
+    )
 
 
 def _grouped(
@@ -272,7 +301,15 @@ def _unfixable(item: Judged, approvals: dict[str, Approval], surfaces: Surfaces)
     guessing commands. A person with write access may still ask for a pull request on that issue —
     the same unlock stamp that releases a major — and then this check yields: CI on the PR is the
     proof they chose, recorded as `awaiting_ci` rather than as local verification.
+
+    Routine quarantine is never that path. The knowledge forbids waiving the window with a comment;
+    even a stamped approval does not put the finding on the fix queue.
     """
+    if is_routine_quarantine(item.finding):
+        return (
+            "it is waiting for the quarantine window to clear; a person cannot waive that for a "
+            "routine pin"
+        )
     if item.reliability is not Reliability.REPRODUCIBLE:
         return "the evidence behind it is heuristic, so a code change would rest on a guess"
     if not item.finding.remediation:

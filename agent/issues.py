@@ -32,11 +32,11 @@ from typing import Any
 
 from agent.absence import Absences
 from agent.escalate import Escalation
-from agent.findings import Action, Finding
+from agent.findings import Action, Finding, Klass
 from agent.reconcile import Posted
 from agent.scm import marker
 from agent.scm.port import Issue, NewIssue, Platform, ScmError
-from agent.unlock import Approval, held, read, render, stamped
+from agent.unlock import Approval, held, is_routine_quarantine, read, render, stamped
 from agent.verdict import Judged, Verdict
 
 LABEL = "agent"
@@ -272,7 +272,28 @@ def _decision(
     Both halves are written for somebody arriving at this issue cold: what is being asked, and what
     saying yes will cause. An approval, once given, is stated in words and stamped in a comment the
     agent reads on later runs, so the question is asked exactly once.
+
+    Routine quarantine is not a person-hold: the knowledge forbids the human-only footer there, and
+    an unlock stamp does not waive the window. A security finding with `needs_unlock` is the
+    exception that *does* ask — fixing the advisory outweighs quarantine.
     """
+    if is_routine_quarantine(finding):
+        if approval is not None:
+            return [
+                "",
+                f"**{approval.sentence}** That stamp does not waive a routine quarantine wait. "
+                "This pin stays until the window clears; a later run will act then without needing "
+                "this approval.",
+                "",
+                render(approval),
+            ]
+        return [
+            "",
+            "**Waiting for quarantine.** This will not be changed automatically: the version is "
+            "still inside the product's quarantine window. The blocker is the clock, not a person. "
+            "A comment asking for a pull request will be refused until the window clears (a "
+            "security finding may offer an exception; this one does not).",
+        ]
     if approval is not None:
         if no_surface:
             return [
@@ -291,6 +312,21 @@ def _decision(
             render(approval),
         ]
     hold = held(finding)
+    if finding.klass is Klass.SECURITY and finding.needs_unlock:
+        after = (
+            "without local verification so CI on that PR can check it"
+            if no_surface
+            else "verifies it against this product's own commands"
+        )
+        return [
+            "",
+            f"**Waiting for a person.** This will not be changed automatically, because {hold}.",
+            "",
+            "Comment here to unlock a pull request — plain words, no phrase to match. Fixing the "
+            f"advisory outweighs quarantine: the next run prepares the change as a security "
+            f"exception, {after}, and opens it for review. Until then every run reports it and "
+            "leaves the code alone.",
+        ]
     if no_surface:
         why = (
             f"because {hold}"

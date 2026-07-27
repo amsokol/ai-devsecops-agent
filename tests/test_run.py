@@ -129,7 +129,7 @@ def test_a_maintenance_run_carries_a_fix_phase_even_when_there_is_nothing_to_fix
     assert code == int(ExitCode.OK)
     manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
     assert [role["role"] for role in manifest["roles"]] == ["analyst", "fixer"]
-    assert manifest["remediation"] == {"jobs": [], "deferred": []}
+    assert manifest["remediation"] == {"jobs": [], "deferred": [], "awaiting_review": []}
     assert manifest["fixes"] == []
 
 

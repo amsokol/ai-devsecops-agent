@@ -70,6 +70,21 @@ class Repository:
             return False
         return True
 
+    def delete_branch(self, name: str) -> None:
+        """Drop a local abandoned fix branch so the next prepare starts from the default tip.
+
+        Refuses when the checkout is currently on that branch — reclaim always runs from the default
+        (or detached) HEAD of a maintenance checkout.
+        """
+        if not self.has_branch(name):
+            return
+        current = _git(self.path, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        if current == name:
+            raise ConfigError(
+                f"cannot delete branch {name!r} while the checkout is on it; move off it first"
+            )
+        _git(self.path, "branch", "-D", name)
+
     @property
     def branch(self) -> str:
         """The branch this checkout is on, which is what a fix is proposed against.

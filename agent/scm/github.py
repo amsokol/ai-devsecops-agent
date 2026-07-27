@@ -442,6 +442,15 @@ class GitHub:
             f"repos/{self.slug}/issues/{issue.number}/comments", method="POST", body={"body": body}
         )
 
+    def issue_comment_bodies(self, number: int) -> tuple[str, ...]:
+        bodies: list[str] = []
+        for item in self._paged(
+            f"repos/{self.slug}/issues/{number}/comments",
+            query="sort=created&direction=asc",
+        ):
+            bodies.append(str(item.get("body") or ""))
+        return tuple(bodies)
+
     def close_issue(self, issue: Issue) -> None:
         self._api(
             f"repos/{self.slug}/issues/{issue.number}",
@@ -461,9 +470,54 @@ class GitHub:
                     number=int(item.get("number", 0)),
                     head=reference,
                     reference=str(item.get("html_url") or ""),
+                    author=_author(item.get("user")),
                 )
             )
         return tuple(found)
+
+    def closed_on(self, head: str) -> Proposal | None:
+        """Newest closed PR whose head ref is exactly this branch name."""
+        owner = self.slug.split("/", 1)[0]
+        found: Proposal | None = None
+        for item in self._paged(
+            f"repos/{self.slug}/pulls",
+            query=f"state=closed&head={owner}:{head}&sort=updated&direction=desc",
+        ):
+            tip = item.get("head")
+            reference = str(tip.get("ref") or "") if isinstance(tip, dict) else ""
+            if reference != head:
+                continue
+            found = Proposal(
+                number=int(item.get("number", 0)),
+                head=reference,
+                reference=str(item.get("html_url") or ""),
+                author=_author(item.get("user")),
+            )
+            break
+        return found
+
+    def note_change(self, number: int, body: str) -> None:
+        # Pull request comments use the same issues comments endpoint.
+        self._api(
+            f"repos/{self.slug}/issues/{number}/comments", method="POST", body={"body": body}
+        )
+
+    def has_remote_branch(self, name: str) -> bool:
+        try:
+            self._api(f"repos/{self.slug}/git/ref/heads/{name}")
+        except ScmError as error:
+            if "404" in str(error) or "Not Found" in str(error):
+                return False
+            raise
+        return True
+
+    def delete_branch(self, name: str) -> None:
+        try:
+            self._api(f"repos/{self.slug}/git/refs/heads/{name}", method="DELETE")
+        except ScmError as error:
+            if "404" in str(error) or "Not Found" in str(error):
+                return
+            raise
 
     def push(self, path: Path, *, source: str, target: str) -> None:
         """Send the ref over HTTPS with the run's own credential, and never force.
@@ -625,9 +679,13 @@ class GitHub:
         return dict(os.environ) | {"GH_TOKEN": self.credential.token}
 
 
+def _author(user: object) -> str:
+    return str(user.get("login", "")) if isinstance(user, dict) else ""
+
+
 def _comment(got: dict[str, Any]) -> Comment:
     user = got.get("user") or {}
-    login = str(user.get("login", "")) if isinstance(user, dict) else ""
+    login = _author(user)
     kind = str(user.get("type", "")) if isinstance(user, dict) else ""
     return Comment(
         id=int(got.get("id", 0)),

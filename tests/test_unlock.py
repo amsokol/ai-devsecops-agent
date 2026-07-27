@@ -129,8 +129,115 @@ def test_a_security_remediation_is_not_parked_behind_a_question_nobody_asked() -
     """Waiting is the greater risk on an advisory, and the knowledge says so. A hold the agent
     invented would keep a fix off the branch while the advisory stays exploitable."""
     assert not held(a_finding(klass=Klass.SECURITY, target="3.1.4"))
-    # Declared, though, it stands: somebody looked at this repository and asked to be consulted.
-    assert held(a_finding(klass=Klass.SECURITY, needs_unlock=True))
+    # Declared, though, it stands: on security that declaration is the quarantine exception.
+    reason = held(a_finding(klass=Klass.SECURITY, needs_unlock=True))
+    assert "quarantine window" in reason
+    assert "security exception" in reason
+
+
+def test_routine_quarantine_refuses_an_unlock_comment() -> None:
+    from agent.unlock import refuse_unlock
+
+    key = "capabilities/deps-outdated:ecosystems/github-actions:actions/checkout:quarantine"
+    assert "cannot waive" in (refuse_unlock(key) or "")
+    assert refuse_unlock(KEY) is None
+
+
+def test_a_quarantine_issue_waits_on_the_clock_not_a_person() -> None:
+    """Empty verification surfaces used to paste the human-only footer onto quarantine pins."""
+    platform = FakePlatform()
+    pin = Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.MEDIUM,
+        subject=Subject(
+            ecosystem="ecosystems/github-actions",
+            package="actions/checkout",
+            version="v7.0.1",
+        ),
+        summary="actions/checkout@v7.0.1 is still inside quarantine.",
+        rationale="The pin on main has not cleared the product window.",
+        remediation="Wait until the quarantine window clears.",
+        kind=Kind.QUARANTINE,
+        forbidden_state=True,
+    )
+    track_findings(
+        platform,
+        verdict=a_verdict(a_judged(pin)),
+        absences=counting((reported(),)),
+        head="abc123",
+        limit=5,
+        surfaces={},
+    )
+    body = platform.tracked[0].body
+    assert "Waiting for quarantine" in body
+    assert "Waiting for a person" not in body
+    assert "ask for a pull request" not in body.lower()
+
+
+def test_a_security_quarantine_exception_offers_unlock() -> None:
+    platform = FakePlatform()
+    pin = Finding(
+        capability="capabilities/deps-vuln",
+        klass=Klass.SECURITY,
+        severity=Severity.HIGH,
+        subject=Subject(ecosystem="ecosystems/python-uv", package="jinja2", version="2.11.3"),
+        summary="jinja2 is vulnerable; the only fix is still in quarantine.",
+        rationale="Advisory requires 3.1.6, which has not cleared N.",
+        remediation="Move to 3.1.6 as a security exception.",
+        evidence=("advisory|PYSEC-2026-1|",),
+        advisory="PYSEC-2026-1",
+        target="3.1.6",
+        needs_unlock=True,
+        kind=Kind.VULNERABLE,
+    )
+    track_findings(
+        platform,
+        verdict=a_verdict(a_judged(pin)),
+        absences=counting((reported(),)),
+        head="abc123",
+        limit=5,
+        surfaces={},
+    )
+    body = platform.tracked[0].body
+    assert "Waiting for a person" in body
+    assert "outweighs quarantine" in body
+    assert "unlock a pull request" in body
+
+
+def test_an_approval_does_not_queue_a_routine_quarantine_fix(
+    library: Library, overlay: Overlay, overlay_root: Path, git_repo: Path
+) -> None:
+    from tests.test_fix import without_verification
+
+    pin = Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.MEDIUM,
+        subject=Subject(
+            ecosystem="ecosystems/github-actions",
+            package="actions/checkout",
+            version="v7.0.1",
+        ),
+        summary="actions/checkout@v7.0.1 is still inside quarantine.",
+        rationale="The pin on main has not cleared the product window.",
+        remediation="Wait until the quarantine window clears.",
+        target="v7.0.1",
+        kind=Kind.QUARANTINE,
+    )
+    item = a_judged(pin)
+    bare = without_verification(overlay_root, library, overlay)
+    queue = plan_fixes(
+        (item,),
+        library=library,
+        overlay=bare,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        max_open_fix_requests=5,
+        approvals={item.finding.key: APPROVAL},
+    )
+    assert not queue.jobs
+    assert "quarantine window" in dict(queue.deferred)[item.finding.key]
 
 
 def test_an_approval_is_recorded_once_and_read_back_exactly() -> None:

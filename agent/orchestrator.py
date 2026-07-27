@@ -23,7 +23,7 @@ from agent.budget import Ledger, RunBudget
 from agent.config import Config, Models
 from agent.containment import Checkout
 from agent.coverage import Coverage, previous
-from agent.domain import FixOutcome, Intent, Plan, Role, Trigger
+from agent.domain import AnswerOutcome, FixOutcome, Intent, Plan, Role, Trigger
 from agent.errors import ConfigError, ExitCode
 from agent.escalate import Escalation, weigh
 from agent.executor import Executed, execute
@@ -31,6 +31,7 @@ from agent.findings import Finding, merge
 from agent.intent import Course, Read, classify, narrow
 from agent.issues import LABEL, Tracking, track_findings
 from agent.library import Library
+from agent.lifecycle import notice_open_prs, reclaim_abandoned
 from agent.manifest import Manifest
 from agent.overlay import MAINTENANCE, REVIEW, VALUES_FILE, Overlay, digest_on_disk, within
 from agent.patch import prepare
@@ -44,12 +45,13 @@ from agent.remediate import BRANCH_PREFIX, Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
 from agent.scm import GitHub, Identity, Issue, Platform, ScmError
+from agent.scm.port import Proposal
 from agent.session import Session
 from agent.state import Memory
 from agent.storage import FactCache
 from agent.toolkit import Toolkits
 from agent.tools import grant
-from agent.unlock import Approval, granted
+from agent.unlock import Approval, granted, refuse_unlock
 from agent.verdict import TaskOutcome, Verdict, decide, judge
 from agent.wake import Wake, Woken, admit
 
@@ -404,6 +406,7 @@ def run(
     ledger = Ledger(RunBudget(max_parallel=spend.tasks_at_once, tokens=spend.tokens_per_run))
 
     proposed: tuple[str, ...] = ()
+    open_proposals: dict[str, Proposal] = {}
     tracked: tuple[Issue, ...] | None = None
     approvals: dict[str, Approval] = {}
     if may_fix and request.publish:
@@ -411,7 +414,9 @@ def run(
             may_fix = False
         else:
             try:
-                proposed = tuple(item.head for item in speaker.proposals(prefix=BRANCH_PREFIX))
+                listed = speaker.proposals(prefix=BRANCH_PREFIX)
+                open_proposals = {item.head: item for item in listed}
+                proposed = tuple(open_proposals)
             except ScmError as error:
                 may_fix = False
                 manifest.warnings.append(
@@ -455,8 +460,10 @@ def run(
             patching=patching,
             restraint=posture.aside,
             proposed=proposed,
+            open_proposals=open_proposals,
             approvals=approvals,
             checkout=checkout,
+            platform=speaker if may_fix else None,
             close=owned,
         )
     )
@@ -536,6 +543,7 @@ def run(
             outcomes=outcomes,
             change=session.change,
             fixes=tuple(fixes),
+            queue=performed.queue,
             new_issues=overlay.queue.max_new_issues_per_run,
             tracked=tracked,
             approvals=approvals,
@@ -568,6 +576,8 @@ class Performed:
     verdict: Verdict | None = None
     fixes: list[Fix] = field(default_factory=list)
     queue: Queue | None = None
+    reclaimed: list[str] = field(default_factory=list)
+    """Abandoned fix branches removed before this run prepared replacements."""
     read: Read | None = None
     """How a comment was read, when one woke this run."""
     answered: Answered | None = None
@@ -596,8 +606,10 @@ async def _conduct(
     patching: bool,
     restraint: str,
     proposed: tuple[str, ...],
+    open_proposals: dict[str, Proposal],
     approvals: dict[str, Approval],
     checkout: Checkout,
+    platform: Platform | None,
     close: bool,
 ) -> Performed:
     """Everything that needs a model, in one event loop, including the shutdown.
@@ -645,8 +657,10 @@ async def _conduct(
             ledger=ledger,
             may_fix=may_fix,
             proposed=proposed,
+            open_proposals=open_proposals,
             approvals=approvals,
             checkout=checkout,
+            platform=platform,
         )
         return performed
     finally:
@@ -729,6 +743,21 @@ async def _episode(
                 checkout=checkout,
             )
         case Course.RECHECK:
+            refusal = refuse_unlock(woken.key)
+            classified = performed.read.classification if performed.read else None
+            if (
+                refusal is not None
+                and classified is not None
+                and classified.intent is Intent.UNLOCK
+            ):
+                # Routine quarantine: do not stamp, do not re-check, answer the person now.
+                performed.halted = refusal
+                performed.answered = Answered(
+                    outcome=AnswerOutcome.ANSWERED,
+                    reply=refusal,
+                    task="wake-unlock-refused",
+                )
+                return plan
             _release(performed, woken, approvals=approvals, when=toolkits.now)
             narrowed, why = narrow(plan, woken.key)
             if why:
@@ -784,8 +813,10 @@ async def _perform(
     ledger: Ledger,
     may_fix: bool,
     proposed: tuple[str, ...],
+    open_proposals: dict[str, Proposal],
     approvals: dict[str, Approval],
     checkout: Checkout,
+    platform: Platform | None,
 ) -> None:
     """Analyse, decide, and then — on a maintenance run — fix what the decision allows."""
     performed.executed = await execute(
@@ -803,6 +834,27 @@ async def _perform(
     performed.verdict = _conclude(manifest, performed.executed, rules=rules, session=session)
     if not may_fix:
         return
+    if platform is not None:
+        reclaimed = reclaim_abandoned(
+            platform,
+            repository,
+            judged=performed.verdict.judged,
+            open_heads=set(open_proposals) | set(proposed),
+            approvals=approvals,
+            overlay=overlay,
+            run=manifest.run_id,
+        )
+        performed.reclaimed = list(reclaimed.branches)
+        if reclaimed.branches or reclaimed.noted or reclaimed.failure:
+            manifest.actions = {
+                **(manifest.actions if isinstance(manifest.actions, dict) else {}),
+                "reclaim": reclaimed.as_json(),
+            }
+        if reclaimed.failure:
+            manifest.warnings.append(
+                f"an abandoned fix branch could not be fully reclaimed ({reclaimed.failure}): "
+                "subjects still blocked by that tip were left for a later run"
+            )
     performed.queue = plan_fixes(
         performed.verdict.judged,
         library=library,
@@ -811,6 +863,7 @@ async def _perform(
         repository=repository,
         max_open_fix_requests=overlay.queue.max_open_fix_requests,
         proposed=proposed,
+        open_proposals=open_proposals,
         approvals=approvals,
     )
     performed.fixes = await apply(
@@ -1008,6 +1061,7 @@ def _announce(
     outcomes: tuple[TaskOutcome, ...],
     change: ChangeView | None,
     fixes: tuple[Fix, ...],
+    queue: Queue | None = None,
     new_issues: int,
     tracked: tuple[Issue, ...] | None = None,
     approvals: dict[str, Approval] | None = None,
@@ -1035,7 +1089,10 @@ def _announce(
         manifest.actions = {"failure": str(error)}
         manifest.warnings.append(f"nothing was published: {error}")
         return
+    prior = manifest.actions if isinstance(manifest.actions, dict) else {}
     actions: dict[str, Any] = {"identity": identity.as_json()}
+    if "reclaim" in prior:
+        actions["reclaim"] = prior["reclaim"]
     caution = caution_for(identity)
 
     if request.trigger.is_maintenance:
@@ -1058,6 +1115,15 @@ def _announce(
             actions["escalations"] = [item.as_json() for item in escalations]
         if recorded.failure:
             manifest.warnings.append(f"the tracked issues are incomplete: {recorded.failure}")
+        if queue is not None and queue.awaiting_review:
+            notices = notice_open_prs(
+                platform,
+                awaiting=queue.awaiting_review,
+                numbers=recorded.numbers,
+                judged={item.finding.key: item for item in verdict.judged},
+            )
+            if notices:
+                actions["open_pr_notices"] = [item.as_json() for item in notices]
         if memory is not None:
             # Written after the issues, so a streak is only recorded as continuing once the run has
             # done what the streak is for. A memory stored before the write, in a run that then
