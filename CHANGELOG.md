@@ -13,6 +13,32 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract range.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
+## 0.2.2 — 2026-07-27
+
+Pins knowledge library `0.5.4` (contract version 2). Behaviour change on github-actions outdated
+sweeps (deterministic census and Release publish time) and on quarantine findings that already name
+a cleared `Moves to`.
+
+### Added
+
+- Tool `list_action_pins`: walks `.github/workflows` and `.github/actions` for third-party `uses:`
+  and container `image:` pins. After a `deps-outdated@github-actions` result, the executor fails the
+  task when Coverage subjects do not cover that census — a partial sweep no longer publishes.
+- Tool `action_publish_time`: GitHub Release `published_at` for an action tag. A publish-time fact
+  that cites `committer.date` fails the task (live miss: commit earlier than Release falsely cleared
+  quarantine and closed demo2 #4).
+
+### Changed
+
+- Routine quarantine is clock-only only when `target` is empty. With a cleared target the issue uses
+  the remediable (human-only / major) footer; unlock may proceed, including `awaiting_ci` when there
+  is no verification surface. Refuse-unlock skips when the issue body already has `Moves to`.
+- Absence closure: a `:quarantine` finding is **not** closed on the first answer just because a person
+  commented (unlock wake). It still needs the usual two consecutive complete absences — otherwise a
+  single wrong recheck closes a forbidden-state issue while the person is watching.
+- [`DESIGN.md`](DESIGN.md) Found in operation items 1 (github-actions census) and 10 (cleared target)
+  marked Done in agent 0.2.2; committer-clock miss recorded.
+
 ## 0.2.1 — 2026-07-27
 
 Pins knowledge library `0.5.3` (contract version 2). Behaviour change on quarantine findings and on

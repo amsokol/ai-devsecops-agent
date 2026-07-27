@@ -953,6 +953,11 @@ patterns the ecosystem declares — and a incomplete census must fail the task r
 partial finding list. Until that tool exists, absence of a finding on a subject that used to be on
 the list must not count as proof, and coverage shortfalls should be loud enough that a partial raise
 is not mistaken for a full sweep. The knowledge half is in the library design, section 16.
+**Done in agent 0.2.2 (library 0.5.4), github-actions only:** `list_action_pins` walks
+`.github/workflows` and `.github/actions`; after an outdated sweep the executor raises `InvalidResult`
+when Coverage subjects do not cover that census. Other ecosystems still rely on the model.
+**Also in 0.2.2:** `action_publish_time` + reject of `committer.date` publish-time facts; a
+`:quarantine` issue is not closed on first absence merely because a person commented (unlock wake).
 
 **2. A returning finding opens a new issue instead of reopening the old one.** The finding key is the
 same, but the issue is different: the thread, edit history and human comments stay in the closed one.
@@ -1022,6 +1027,10 @@ version, treat the work as that move (floating→concrete / pin-down), not as "w
 clears"; keep the in-window tip in pending quarantine reporting. Clock-only refuse remains for
 findings with no cleared candidate. Depends on reliable target selection (item 9). The knowledge half
 is in the library design, section 16.
+**Done in agent 0.2.2 (library 0.5.4):** `is_routine_quarantine` is clock-only only when `target` is
+empty; with a non-empty target the issue uses the remediable footer, unlock may proceed (including
+`awaiting_ci` when there is no surface), and refuse-unlock skips when the issue body already has
+`Moves to`. Choosing that target deterministically remains item 9.
 
 ## 16. Planned: trust surfaces
 

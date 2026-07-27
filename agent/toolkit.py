@@ -16,6 +16,7 @@ Two properties are enforced here rather than requested in a prompt:
 from __future__ import annotations
 
 import json
+import urllib.error
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,7 +33,9 @@ from agent.tools import (
     NotPermitted,
     OutsideRepository,
     Withheld,
+    action_publish_time,
     compare_versions,
+    list_action_pins,
 )
 from agent.tools.dates import quarantine
 
@@ -325,6 +328,34 @@ class Toolkit:
                 run=self._compare_versions,
             ),
             Tool(
+                name="list_action_pins",
+                description=(
+                    "List every third-party GitHub Actions `uses:` and container `image:` pin under "
+                    ".github/workflows and .github/actions. Deterministic census — call this first "
+                    "on a deps-outdated github-actions sweep and record a fact for each package, "
+                    "including pins that are fine. Never invent the pin list by reading files by eye."
+                ),
+                schema=_schema({}),
+                run=self._list_action_pins,
+            ),
+            Tool(
+                name="action_publish_time",
+                description=(
+                    "GitHub Release published_at for an action tag (owner/name + tag). Use this for "
+                    "quarantine on github-actions — never a commit committer date, which predates "
+                    "the release and falsely clears the window. When found is false, treat as "
+                    "unverified (do not clear)."
+                ),
+                schema=_schema(
+                    {
+                        "package": _string("owner/name, e.g. actions/checkout"),
+                        "tag": _string("concrete tag, e.g. v7.0.1 — not a branch"),
+                    },
+                    required=["package", "tag"],
+                ),
+                run=self._action_publish_time,
+            ),
+            Tool(
                 name="check_quarantine",
                 description=(
                     "Given a publication timestamp, say whether the quarantine window has elapsed. "
@@ -606,6 +637,40 @@ class Toolkit:
             "order": comparison.order,
             "step": comparison.step.value if comparison.step else None,
         }
+
+    def _list_action_pins(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        del arguments
+        pins = list_action_pins(self._tools.files.root)
+        call = self._record_call(
+            "list_action_pins",
+            Origin.TOOL,
+            f"{len(pins)} pin(s) under .github/",
+            ok=True,
+        )
+        return {
+            "call": call.id,
+            "pins": [pin.as_json() for pin in pins],
+            "packages": sorted({pin.package for pin in pins}),
+        }
+
+    def _action_publish_time(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        package = _required(arguments, "package")
+        tag = _required(arguments, "tag")
+        try:
+            answer = action_publish_time(self._tools.http, package, tag)
+        except HostNotPermitted as error:
+            self._record_call(
+                "action_publish_time", Origin.API, f"{package}@{tag}", ok=False, detail=str(error)
+            )
+            raise Refused(str(error)) from None
+        except (OSError, ValueError, urllib.error.HTTPError) as error:
+            self._record_call(
+                "action_publish_time", Origin.API, f"{package}@{tag}", ok=False, detail=str(error)
+            )
+            raise Refused(str(error)) from None
+        source = answer.url if answer.found else f"{answer.url} (no release)"
+        call = self._record_call("action_publish_time", Origin.API, source, ok=True)
+        return {"call": call.id} | answer.as_json()
 
     def _check_quarantine(self, arguments: dict[str, Any]) -> dict[str, Any]:
         published = _timestamp(_required(arguments, "published_at"))

@@ -97,25 +97,38 @@ def granted(issues: tuple[Issue, ...]) -> dict[str, Approval]:
 def is_routine_quarantine(finding: Finding) -> bool:
     """Whether this finding waits on the quarantine clock, not on a person.
 
-    The knowledge forbids mixing the human-only unlock footer onto these: a comment cannot waive a
-    routine window. Detection is by `kind`, which is also the last segment of the finding key when
-    there is no advisory — so a wake that only has the key can refuse the same way.
+    Clock-only when there is no cleared `target` to move to. When `target` names a version that has
+    already cleared (pin-down from a floating tip still in window), the finding is remediable and
+    must not use the refuse-unlock / waiting-for-quarantine path.
     """
-    return finding.kind is Kind.QUARANTINE
+    return finding.kind is Kind.QUARANTINE and not finding.target.strip()
 
 
 def is_routine_quarantine_key(key: str) -> bool:
-    """Key-shaped half of `is_routine_quarantine`, for a wake that has not re-loaded the finding."""
+    """Key-shaped half of clock-only quarantine, for a wake that has not re-loaded the finding."""
     return bool(key) and key.rsplit(":", 1)[-1] == "quarantine"
 
 
-def refuse_unlock(key: str) -> str | None:
+def moves_to(body: str) -> str:
+    """The `Moves to` line on an issue body, if any — used when only the key is known at unlock."""
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- Moves to:"):
+            return stripped.split(":", 1)[1].strip()
+        if stripped.startswith("Moves to:"):
+            return stripped.split(":", 1)[1].strip()
+    return ""
+
+
+def refuse_unlock(key: str, *, body: str = "") -> str | None:
     """Why an unlock comment must not be granted, or `None` when it may.
 
-    Routine quarantine is the clock. Granting a stamp would either break the window on the next
-    prepare or leave a person thinking they were ignored. Refusal is the only honest answer.
+    Routine quarantine without a cleared target is the clock. When the issue already names a
+    `Moves to`, that is the remediable cleared candidate — unlock may proceed (subject to surfaces).
     """
     if not is_routine_quarantine_key(key):
+        return None
+    if moves_to(body):
         return None
     return (
         "No. This finding is waiting for the quarantine window to clear. A comment cannot waive a "

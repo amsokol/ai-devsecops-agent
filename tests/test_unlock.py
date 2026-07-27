@@ -141,6 +141,9 @@ def test_routine_quarantine_refuses_an_unlock_comment() -> None:
     key = "capabilities/deps-outdated:ecosystems/github-actions:actions/checkout:quarantine"
     assert "cannot waive" in (refuse_unlock(key) or "")
     assert refuse_unlock(KEY) is None
+    # Cleared Moves to on the issue: unlock may proceed (remediable pin-down).
+    body = "- Moves to: v7.0.0\n"
+    assert refuse_unlock(key, body=body) is None
 
 
 def test_a_quarantine_issue_waits_on_the_clock_not_a_person() -> None:
@@ -173,6 +176,40 @@ def test_a_quarantine_issue_waits_on_the_clock_not_a_person() -> None:
     assert "Waiting for quarantine" in body
     assert "Waiting for a person" not in body
     assert "ask for a pull request" not in body.lower()
+
+
+def test_quarantine_with_cleared_target_is_not_clock_only() -> None:
+    """Young tip in window, cleared concrete target → remediable (human-only), not refuse-unlock."""
+    platform = FakePlatform()
+    pin = Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.MEDIUM,
+        subject=Subject(
+            ecosystem="ecosystems/github-actions",
+            package="actions/checkout",
+            version="v7",
+        ),
+        summary="actions/checkout@v7 resolves to a quarantined tip; pin to cleared v7.0.0.",
+        rationale="v7.0.1 is in window; v7.0.0 has cleared.",
+        remediation="Pin to actions/checkout@v7.0.0 until v7.0.1 clears.",
+        target="v7.0.0",
+        kind=Kind.QUARANTINE,
+        forbidden_state=True,
+    )
+    track_findings(
+        platform,
+        verdict=a_verdict(a_judged(pin)),
+        absences=counting((reported(),)),
+        head="abc123",
+        limit=5,
+        surfaces={},
+    )
+    body = platform.tracked[0].body
+    assert "Waiting for quarantine" not in body
+    assert "Waiting for a person" in body
+    assert "ask for a pull request" in body.lower()
+    assert "Moves to: v7.0.0" in body
 
 
 def test_a_security_quarantine_exception_offers_unlock() -> None:
@@ -222,7 +259,7 @@ def test_an_approval_does_not_queue_a_routine_quarantine_fix(
         summary="actions/checkout@v7.0.1 is still inside quarantine.",
         rationale="The pin on main has not cleared the product window.",
         remediation="Wait until the quarantine window clears.",
-        target="v7.0.1",
+        target="",
         kind=Kind.QUARANTINE,
     )
     item = a_judged(pin)
@@ -238,6 +275,41 @@ def test_an_approval_does_not_queue_a_routine_quarantine_fix(
     )
     assert not queue.jobs
     assert "quarantine window" in dict(queue.deferred)[item.finding.key]
+
+
+def test_cleared_quarantine_target_queues_after_unlock(
+    library: Library, overlay: Overlay, overlay_root: Path, git_repo: Path
+) -> None:
+    from tests.test_fix import without_verification
+
+    pin = Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.MEDIUM,
+        subject=Subject(
+            ecosystem="ecosystems/github-actions",
+            package="actions/checkout",
+            version="v7",
+        ),
+        summary="Pin checkout to cleared v7.0.0.",
+        rationale="Tip in window; v7.0.0 cleared.",
+        remediation="Pin to v7.0.0.",
+        target="v7.0.0",
+        kind=Kind.QUARANTINE,
+    )
+    item = a_judged(pin)
+    bare = without_verification(overlay_root, library, overlay)
+    queue = plan_fixes(
+        (item,),
+        library=library,
+        overlay=bare,
+        playbook="playbooks/maintain",
+        repository=Repository.open(git_repo),
+        max_open_fix_requests=5,
+        approvals={item.finding.key: APPROVAL},
+    )
+    assert [job.key for job in queue.jobs] == [item.finding.key]
+    assert queue.jobs[0].awaiting_ci is True
 
 
 def test_an_approval_is_recorded_once_and_read_back_exactly() -> None:

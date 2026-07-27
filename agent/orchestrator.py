@@ -743,7 +743,7 @@ async def _episode(
                 checkout=checkout,
             )
         case Course.RECHECK:
-            refusal = refuse_unlock(woken.key)
+            refusal = refuse_unlock(woken.key, body=woken.remark)
             classified = performed.read.classification if performed.read else None
             if (
                 refusal is not None

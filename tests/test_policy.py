@@ -80,10 +80,12 @@ def test_no_table_at_all_stops_the_run(library: Library) -> None:
 
 def test_the_shipped_library_parses() -> None:
     """The real thing, because a table only the fixture satisfies would prove nothing."""
+    from agent import __version__
+
     root = Path(__file__).resolve().parents[2] / "ai-devsecops-skills-knowledge"
     if not (root / "library.yaml").is_file():
         pytest.skip("the knowledge library is not checked out next to the agent")
-    rules = BlockingRules.read(Library.load(root, agent_version="0.1.0"))
+    rules = BlockingRules.read(Library.load(root, agent_version=__version__))
 
     assert rules.blocks(Klass.SECURITY, Severity.CRITICAL)
     assert not rules.blocks(Klass.ROUTINE, Severity.MEDIUM)

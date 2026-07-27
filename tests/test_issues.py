@@ -231,6 +231,68 @@ def test_an_issue_a_person_is_reading_settles_on_the_first_answer(
     assert not platform.tracked
 
 
+def test_a_quarantine_issue_is_not_closed_on_first_unlock_miss(
+    platform: FakePlatform,
+) -> None:
+    """Unlock wake puts the key in `asked`, but a single recheck that omitted quarantine must not
+    close a forbidden-state issue — that closed demo2 #4 while checkout was still in window."""
+    from agent.findings import Kind
+
+    pin = Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.MEDIUM,
+        subject=Subject(
+            ecosystem="ecosystems/github-actions",
+            package="actions/checkout",
+            version="v7",
+        ),
+        summary="checkout tip still in quarantine",
+        rationale="release date inside window",
+        remediation="Pin to v7.0.0",
+        target="v7.0.0",
+        kind=Kind.QUARANTINE,
+    )
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(pin)), memory=memory)
+    asked = Absences.of(
+        memory,
+        outcomes=(
+            TaskOutcome(
+                id="deps-outdated@github-actions",
+                capability="capabilities/deps-outdated",
+                required=True,
+                outcome=Outcome.CLEAN,
+            ),
+        ),
+        run="run-2",
+        when=WHEN,
+        asked=frozenset({pin.key}),
+        coverage=Coverage.of(
+            (
+                Evidence.verified(
+                    question="declared-pin",
+                    subject=Subject(
+                        ecosystem="ecosystems/github-actions", package="actions/checkout"
+                    ),
+                    value="v7",
+                    origin=Origin.TOOL,
+                    source="list",
+                    observed_at=WHEN,
+                    recipe="capabilities/deps-outdated@list_action_pins",
+                ),
+            )
+        ),
+    )
+
+    record = track_findings(
+        platform, verdict=verdict_of(), absences=asked, head=HEAD, limit=10, label=LABEL
+    )
+
+    assert what(record) == ["kept-open"]
+    assert len(platform.tracked) == 1
+
+
 def test_a_sweep_that_did_not_reach_the_package_cannot_close_its_issue(
     platform: FakePlatform,
 ) -> None:

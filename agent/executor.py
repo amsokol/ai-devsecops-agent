@@ -16,6 +16,7 @@ from agent.backends.port import Brief, Budget, Failure, SessionResult
 from agent.backends.select import Roster
 from agent.brief import compose, digest, knowledge_for, role_instructions
 from agent.budget import Ledger, RunBudget
+from agent.census import incomplete_action_sweep
 from agent.containment import Checkout, Stray, refusal
 from agent.domain import Outcome, Plan, PlannedTask, Reason
 from agent.evidence import EvidenceStore
@@ -313,11 +314,11 @@ async def _attempts(
         budget=budget,
         toolkit=toolkit,
         prompt_for=prompt_for,
-        parse=lambda path: read_result(
+        parse=lambda path: _parse_outdated(
             path,
-            capability=task.capability,
-            known_evidence=evidence.keys(),
-            ecosystem=task.ecosystem,
+            task=task,
+            evidence=evidence,
+            root=toolkit._tools.files.root,
         ),
         checkout=checkout,
     )
@@ -336,6 +337,26 @@ async def _attempts(
     else:
         executed.outcome = _unverified(task, Reason.INVALID_RESULT)
     return executed
+
+
+def _parse_outdated(
+    path: Path,
+    *,
+    task: PlannedTask,
+    evidence: EvidenceStore,
+    root: Path,
+) -> TaskResult:
+    """Parse the result file, then refuse a github-actions sweep that skipped census pins."""
+    result = read_result(
+        path,
+        capability=task.capability,
+        known_evidence=evidence.keys(),
+        ecosystem=task.ecosystem,
+    )
+    gap = incomplete_action_sweep(root, task, tuple(evidence))
+    if gap:
+        raise InvalidResult(f"{path}: {gap}")
+    return result
 
 
 def _not_afforded(task: PlannedTask, detail: str) -> Executed:

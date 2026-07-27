@@ -40,6 +40,10 @@ THRESHOLD = 2
 """Complete runs without a finding before its issue is closed. One is a claim on a single answer."""
 
 
+def _quarantine_key(key: str) -> bool:
+    return bool(key) and key.rsplit(":", 1)[-1] == "quarantine"
+
+
 @dataclass(slots=True)
 class Absences:
     """The streaks as they were, and as they will be stored once this run has been through them.
@@ -120,10 +124,15 @@ class Absences:
                 self.kept[key] = entry
             return pending
 
-        if about_a_failure(key) or key in self.asked:
+        if about_a_failure(key) or (key in self.asked and not _quarantine_key(key)):
             # The failure case is not an absence at all: the issue claims the check has not worked,
             # and the check just worked. Waiting a second run would delay the only good news the
             # agent ever posts, and would break what that issue promises its reader.
+            #
+            # Quarantine keys are excluded from the asked fast-path: a person unlocking a remediable
+            # pin is watching, but a single recheck that used the wrong clock (or simply omitted the
+            # finding) must not close a forbidden-state issue on first miss — that is how demo2 #4
+            # closed while actions/checkout@v7 was still inside the window.
             self.before.pop(key, None)
             return None
 
