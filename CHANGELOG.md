@@ -13,6 +13,40 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract range.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
+## 0.2.4 — 2026-07-28
+
+Pins knowledge library `0.5.6` (contract version 2). Deterministic `Moves to` for all listed
+ecosystems.
+
+### Changed
+
+- Tool `cleared_pin_target`: backends for cargo (crates.io), npm, PyPI (python-uv /
+  python-pip-compile), go-modules (proxy), bazel (BCR + upstream Release), and bsr (`buf` label
+  list). Schema requires `ecosystem`; `kind` only for github-actions. Same target / pending /
+  current_* outcomes; major jumps stay off routine `target`.
+- Image pins (`kind=image`): universal tag parse (numeric parts + variant suffix) — not Temurin/JDK
+  only. Channels like `25-jdk` / `1.24-bookworm` resolve to newest cleared concrete on the same
+  major and suffix.
+- Scheduled/manual maintain posts an issue comment when a fix is refused or a verified branch
+  cannot be proposed (wake already did). Silence after an attempted fix is no longer allowed.
+- Absence settlement is per ecosystem task: `--only deps-outdated@cargo` cannot close a
+  python-uv (or other ecosystem) issue of the same capability.
+- [`DESIGN.md`](DESIGN.md) Found in operation item 9 marked Done for all listed ecosystems.
+
+## 0.2.3 — 2026-07-28
+
+Pins knowledge library `0.5.5` (contract version 2). Deterministic `Moves to` for github-actions.
+
+### Added
+
+- Tool `cleared_pin_target`: lists action tags or Hub image tags on the pin's line, applies
+  quarantine, returns newest cleared `target` and `pending` young tips. Routine outdated/floating
+  findings must use this for `Moves to` (knowledge). Security `needs_unlock` unchanged.
+
+### Changed
+
+- [`DESIGN.md`](DESIGN.md) Found in operation item 9 marked Done for github-actions.
+
 ## 0.2.2 — 2026-07-27
 
 Pins knowledge library `0.5.4` (contract version 2). Behaviour change on github-actions outdated

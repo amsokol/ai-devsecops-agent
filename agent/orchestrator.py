@@ -16,7 +16,7 @@ from typing import Any
 
 from agent import __version__
 from agent.absence import Absences
-from agent.answer import Aftermath, Answered, answer, deliver, status_for
+from agent.answer import Aftermath, Answered, answer, deliver, failure_on_issue, status_for
 from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
@@ -40,7 +40,7 @@ from agent.policy import BlockingRules
 from agent.posture import posture_for
 from agent.propose import propose_fixes
 from agent.publish import publish_review
-from agent.reconcile import caution_for, concluded
+from agent.reconcile import Posted, caution_for, concluded
 from agent.remediate import BRANCH_PREFIX, Fix, Queue, apply, plan_fixes
 from agent.repo import ChangeView, Repository
 from agent.report import render
@@ -1173,6 +1173,24 @@ def _announce(
                     f"the person who woke this run was not told what happened ({failed}); the "
                     "issue they commented on shows no answer"
                 )
+        else:
+            # Wake already posts via `_report_back`. Scheduled / manual maintain must still say on
+            # the issue when a fix was attempted and did not ship — silence there is
+            # indistinguishable from being ignored.
+            noted = _note_unshipped(
+                platform,
+                fixes=fixes,
+                proposals=proposals,
+                numbers=recorded.numbers,
+                run=manifest.run_id,
+            )
+            if noted:
+                actions["failures"] = [item.as_json() for item in noted]
+                for item in noted:
+                    if item.what == "not-noted":
+                        manifest.warnings.append(
+                            f"could not comment on the issue for {item.key}: {item.detail}"
+                        )
     else:
         assert request.change is not None  # noqa: S101 - guaranteed by the check in `run`
         published = publish_review(
@@ -1200,6 +1218,51 @@ def _announce(
     manifest.actions = actions
     if caution:
         manifest.warnings.append(caution)
+
+
+def _note_unshipped(
+    platform: Platform,
+    *,
+    fixes: tuple[Fix, ...],
+    proposals: dict[str, tuple[str, str]],
+    numbers: dict[str, int],
+    run: str,
+) -> list[Posted]:
+    """Comment on each tracked issue where this run tried to ship a fix and could not.
+
+    Reasons come from the fix session (`refused` / `unverified` / `exhausted`) or from proposing
+    (`not-pushed` / `not-proposed`). A successful `proposed` is silent here — the PR is the signal.
+    """
+    reasons: dict[str, str] = {}
+    for fix in fixes:
+        if fix.outcome is FixOutcome.FIXED:
+            continue
+        detail = fix.detail.strip() or f"fix ended as {fix.outcome.value}"
+        for key in fix.job.keys:
+            reasons[key] = detail
+    for key, (what, detail) in proposals.items():
+        if what == "proposed":
+            reasons.pop(key, None)
+            continue
+        reasons[key] = detail.strip() or what
+
+    posted: list[Posted] = []
+    for key, detail in sorted(reasons.items()):
+        number = numbers.get(key)
+        if number is None:
+            posted.append(Posted("not-noted", key, "no tracked issue for this finding"))
+            continue
+        issue = platform.issue_at(number)
+        if issue is None:
+            posted.append(Posted("not-noted", key, f"issue #{number} is not the agent's"))
+            continue
+        try:
+            platform.note(issue, failure_on_issue(key=key, detail=detail, run=run))
+        except ScmError as error:
+            posted.append(Posted("not-noted", key, str(error)))
+            continue
+        posted.append(Posted("noted-failure", key, detail))
+    return posted
 
 
 def _report_back(

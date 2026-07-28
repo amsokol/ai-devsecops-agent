@@ -44,6 +44,28 @@ COMPLETE = frozenset({Outcome.CLEAN, Outcome.FINDINGS})
 """Answers that say what the check found. The rest say that it did not get to look."""
 
 
+def _ecosystem_in_key(key: str) -> str | None:
+    """The ecosystem segment of a finding key, when the key is scoped that way.
+
+    Keys are `capability:ecosystem:package:…` for dependency findings. Without an ecosystem segment
+    the owning check is the whole capability (code surfaces are not split per ecosystem task).
+    """
+    parts = key.split(":")
+    if len(parts) >= 2 and parts[1].startswith("ecosystems/"):
+        return parts[1]
+    return None
+
+
+def _owns_finding(outcome: TaskOutcome, *, capability: str, ecosystem: str | None) -> bool:
+    if outcome.capability != capability:
+        return False
+    if ecosystem is None:
+        return True
+    # Per-ecosystem tasks are planned as `deps-outdated@cargo` for `ecosystems/cargo`.
+    short = ecosystem.rsplit("/", 1)[-1]
+    return outcome.id.endswith(f"@{short}")
+
+
 def unproven(key: str, outcomes: tuple[TaskOutcome, ...]) -> str | None:
     """Why the absence of this finding proves nothing, or `None` when it may be acted on.
 
@@ -51,14 +73,27 @@ def unproven(key: str, outcomes: tuple[TaskOutcome, ...]) -> str | None:
     A task that was exhausted, that could not run its tools, or that never ran because the run was
     narrowed says nothing about this finding; without that guard the first scanner outage looks like
     a week of fixes — every thread resolved, every issue closed, and nothing actually checked.
+
+    For dependency findings the capability is split into one task per ecosystem. A run narrowed with
+    `--only deps-outdated@cargo` must not close a python-uv issue: cargo finishing is not evidence
+    that the python pin was examined.
     """
     capability = key.split(":", 1)[0]
-    owning = [item for item in outcomes if item.capability == capability]
+    ecosystem = _ecosystem_in_key(key)
+    owning = [
+        item for item in outcomes if _owns_finding(item, capability=capability, ecosystem=ecosystem)
+    ]
     if not owning:
+        if ecosystem is not None and any(item.capability == capability for item in outcomes):
+            return (
+                f"{capability} for {ecosystem} did not run in this run, "
+                "so its absence proves nothing"
+            )
         return f"{capability} did not run in this run, so its absence proves nothing"
     if any(item.outcome not in COMPLETE for item in owning):
         states = ", ".join(sorted({item.outcome.value for item in owning}))
-        return f"{capability} finished {states}, so it never got to the end of what it covers"
+        where = f"{capability} for {ecosystem}" if ecosystem else capability
+        return f"{where} finished {states}, so it never got to the end of what it covers"
     return None
 
 

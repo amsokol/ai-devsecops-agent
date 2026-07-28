@@ -350,6 +350,60 @@ def test_a_capability_that_never_ran_cannot_close_anything(platform: FakePlatfor
     assert len(platform.tracked) == 1
 
 
+def test_one_ecosystem_of_a_capability_cannot_close_another(platform: FakePlatform) -> None:
+    """`--only deps-outdated@cargo` must not close a python-uv issue: same capability, different task."""
+    cargo_cap = "capabilities/deps-outdated"
+    cargo = Finding(
+        capability=cargo_cap,
+        klass=Klass.ROUTINE,
+        severity=Severity.MEDIUM,
+        subject=Subject(ecosystem="ecosystems/cargo", package="serde", version="1.0.0"),
+        summary="serde is outdated",
+        rationale="registry has a newer cleared release.",
+        remediation="Bump serde.",
+        location=Location(path="Cargo.toml", line=1),
+    )
+    track(
+        platform,
+        verdict_of(judged(cargo)),
+        outcomes=(
+            TaskOutcome(
+                id="deps-outdated@cargo",
+                capability=cargo_cap,
+                required=True,
+                outcome=Outcome.FINDINGS,
+            ),
+        ),
+    )
+    assert len(platform.tracked) == 1
+
+    # A later run that only completes python-uv must not treat the cargo finding as absent-proven.
+    only_uv = TaskOutcome(
+        id="deps-outdated@python-uv",
+        capability=cargo_cap,
+        required=True,
+        outcome=Outcome.CLEAN,
+    )
+    memory: dict[str, Any] = {}
+    first = track(
+        platform,
+        verdict_of(),
+        outcomes=(only_uv,),
+        memory=memory,
+    )
+    second = track(
+        platform,
+        verdict_of(),
+        outcomes=(only_uv,),
+        memory=memory,
+    )
+    assert what(first) == ["kept-open"]
+    assert "ecosystems/cargo" in first.posted[0].detail
+    assert what(second) == ["kept-open"]
+    assert len(platform.tracked) == 1
+    assert not platform.closed
+
+
 def test_a_run_stays_within_the_new_issues_it_is_allowed(platform: FakePlatform) -> None:
     """Left for the next run rather than dropped or squeezed into one issue: a finding without its
     own key is a finding nobody can reconcile later."""

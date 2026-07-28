@@ -265,6 +265,29 @@ def status_for(woken: Woken, aftermath: Aftermath, *, asked: str, run: str) -> s
     return marker.stamp("\n".join(lines), woken.key)
 
 
+def failure_on_issue(*, key: str, detail: str, run: str) -> str:
+    """Agent-authored note when a fix was attempted and did not reach a reviewable change.
+
+    Scheduled maintain used to leave the issue silent after a refuse: the reason lived only in the
+    run report. A person watching the tracker then sees an open finding and nothing else — which
+    reads as the agent ignoring them. Wake already posts via `status_for`; this is the same duty for
+    every other path that tried and could not ship.
+    """
+    reason = detail.strip() or "The run's record says why."
+    body = "\n".join(
+        [
+            "This run could not ship a fix for this finding.",
+            "",
+            reason,
+            "",
+            "---",
+            "",
+            f"`ai-devsecops-agent`, run `{run}`.",
+        ]
+    )
+    return marker.stamp(body, key)
+
+
 def _body(woken: Woken, written: Answered, *, run: str) -> str:
     """The published comment: the session's prose, then the agent's own facts, then the marker."""
     if written.outcome is AnswerOutcome.ANSWERED:

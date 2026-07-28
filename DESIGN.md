@@ -1017,6 +1017,11 @@ how often this happens; it does not make two runs agree. Direction: a determinis
 candidates and selects the newest cleared version; the analyst may classify the problem and must not
 invent which concrete tag wins. Pair with the open-PR notice when `Moves to` advances under review
 (item 3). The knowledge half is in the library design, section 16.
+**Done in agent 0.2.3 (library 0.5.5), github-actions only:** `cleared_pin_target` owns target
+choice for actions and images. Other ecosystems remain open.
+**Done in agent 0.2.4 (library 0.5.6), all listed ecosystems:** backends for cargo, npm, PyPI
+(python-uv / python-pip-compile), go-modules, bazel (BCR + upstream Release), and bsr (`buf`
+label list). Same three outcomes; major-line jumps stay off routine `target`.
 
 **10. Cleared target named, but unlock and footer still say "wait for quarantine".** On `demo2`
 issue #4 (`actions/checkout@v7` → resolved `v7.0.1` in window), remediation and `Moves to` already

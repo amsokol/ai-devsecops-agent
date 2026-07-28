@@ -34,6 +34,7 @@ from agent.tools import (
     OutsideRepository,
     Withheld,
     action_publish_time,
+    cleared_pin_target,
     compare_versions,
     list_action_pins,
 )
@@ -330,10 +331,11 @@ class Toolkit:
             Tool(
                 name="list_action_pins",
                 description=(
-                    "List every third-party GitHub Actions `uses:` and container `image:` pin under "
-                    ".github/workflows and .github/actions. Deterministic census — call this first "
-                    "on a deps-outdated github-actions sweep and record a fact for each package, "
-                    "including pins that are fine. Never invent the pin list by reading files by eye."
+                    "List every third-party GitHub Actions `uses:` and container `image:` pin "
+                    "under .github/workflows and .github/actions. Deterministic census — call "
+                    "this first on a deps-outdated github-actions sweep and record a fact for "
+                    "each package, including pins that are fine. Never invent the pin list by "
+                    "reading files by eye."
                 ),
                 schema=_schema({}),
                 run=self._list_action_pins,
@@ -341,10 +343,10 @@ class Toolkit:
             Tool(
                 name="action_publish_time",
                 description=(
-                    "GitHub Release published_at for an action tag (owner/name + tag). Use this for "
-                    "quarantine on github-actions — never a commit committer date, which predates "
-                    "the release and falsely clears the window. When found is false, treat as "
-                    "unverified (do not clear)."
+                    "GitHub Release published_at for an action tag (owner/name + tag). Use this "
+                    "for quarantine on github-actions — never a commit committer date, which "
+                    "predates the release and falsely clears the window. When found is false, "
+                    "treat as unverified (do not clear)."
                 ),
                 schema=_schema(
                     {
@@ -354,6 +356,31 @@ class Toolkit:
                     required=["package", "tag"],
                 ),
                 run=self._action_publish_time,
+            ),
+            Tool(
+                name="cleared_pin_target",
+                description=(
+                    "Deterministic newest quarantine-cleared concrete target for a package pin. "
+                    "Pass ecosystem document id, package, and current version. For github-actions "
+                    "also pass kind 'action' or 'image'. Returns target (Moves to), pending, and "
+                    "current_resolved / current_cleared. Routine only — never invent Moves to; "
+                    "security needs_unlock is unchanged."
+                ),
+                schema=_schema(
+                    {
+                        "ecosystem": _string(
+                            "ecosystem document id, e.g. ecosystems/cargo or "
+                            "ecosystems/github-actions"
+                        ),
+                        "package": _string("package, module, crate, or image/action name"),
+                        "current": _string("current pin or requirement as declared"),
+                        "kind": _string(
+                            "required for github-actions only: 'action' or 'image'"
+                        ),
+                    },
+                    required=["ecosystem", "package", "current"],
+                ),
+                run=self._cleared_pin_target,
             ),
             Tool(
                 name="check_quarantine",
@@ -670,6 +697,48 @@ class Toolkit:
             raise Refused(str(error)) from None
         source = answer.url if answer.found else f"{answer.url} (no release)"
         call = self._record_call("action_publish_time", Origin.API, source, ok=True)
+        return {"call": call.id} | answer.as_json()
+
+    def _cleared_pin_target(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        ecosystem = _required(arguments, "ecosystem")
+        package = _required(arguments, "package")
+        current = _required(arguments, "current")
+        kind = _optional(arguments.get("kind")) or ""
+
+        def run_command(command: list[str]) -> Any:
+            return self._tools.commands.run(tuple(command))
+
+        try:
+            answer = cleared_pin_target(
+                self._tools.http,
+                ecosystem=ecosystem,
+                package=package,
+                current=current,
+                kind=kind,
+                days=self.quarantine_days,
+                now=self.now,
+                run_command=run_command,
+            )
+        except HostNotPermitted as error:
+            self._record_call(
+                "cleared_pin_target",
+                Origin.API,
+                f"{ecosystem}:{package}@{current}",
+                ok=False,
+                detail=str(error),
+            )
+            raise Refused(str(error)) from None
+        except (OSError, ValueError, urllib.error.HTTPError) as error:
+            self._record_call(
+                "cleared_pin_target",
+                Origin.API,
+                f"{ecosystem}:{package}@{current}",
+                ok=False,
+                detail=str(error),
+            )
+            raise Refused(str(error)) from None
+        source = f"{ecosystem}:{package}@{current}→{answer.target or 'none'}"
+        call = self._record_call("cleared_pin_target", Origin.API, source, ok=True)
         return {"call": call.id} | answer.as_json()
 
     def _check_quarantine(self, arguments: dict[str, Any]) -> dict[str, Any]:
