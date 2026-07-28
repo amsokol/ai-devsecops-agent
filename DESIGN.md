@@ -958,6 +958,9 @@ is not mistaken for a full sweep. The knowledge half is in the library design, s
 when Coverage subjects do not cover that census. Other ecosystems still rely on the model.
 **Also in 0.2.2:** `action_publish_time` + reject of `committer.date` publish-time facts; a
 `:quarantine` issue is not closed on first absence merely because a person commented (unlock wake).
+**Also in agent 0.2.4:** absence settlement is scoped to the ecosystem of the task that ran —
+`--only deps-outdated@cargo` must not close (or treat as absent) findings owned by another ecosystem
+of the same capability. A narrow dogfood run had closed github-actions issues that way.
 
 **2. A returning finding opens a new issue instead of reopening the old one.** The finding key is the
 same, but the issue is different: the thread, edit history and human comments stay in the closed one.
@@ -980,6 +983,10 @@ the old PR. See the maintain playbook's Fix branches section.
 tip, human-only surface) are written where a person looks: an issue comment pointing at the open PR,
 or a note on the closed CR before recreate. Deferred queue entries remain in the manifest; the issue
 is no longer silent about why nothing moved.
+**Also in agent 0.2.4 (library 0.5.6):** any attempted fix that does not ship — refused, unverified,
+exhausted, or a verified branch that cannot be pushed/proposed — posts that failure on the tracked
+issue on scheduled and manual maintain as well (wake already reported). Dogfood left issues waiting
+with no PR and no comment; silence after an attempt is no longer allowed.
 
 **5. A multi-part finding hits the new-issue ceiling.** One `urllib3` pin brought nine advisories: five
 issues filed, four deferred to the next run. The ceiling counts findings, not subjects, so one bad
@@ -1021,7 +1028,9 @@ invent which concrete tag wins. Pair with the open-PR notice when `Moves to` adv
 choice for actions and images. Other ecosystems remain open.
 **Done in agent 0.2.4 (library 0.5.6), all listed ecosystems:** backends for cargo, npm, PyPI
 (python-uv / python-pip-compile), go-modules, bazel (BCR + upstream Release), and bsr (`buf`
-label list). Same three outcomes; major-line jumps stay off routine `target`.
+label list). Same three outcomes; major-line jumps stay off routine `target`. Image pins
+(`kind=image`) use a universal tag parse (numeric parts + variant suffix) — channel→concrete for any
+Hub family (`25-jdk`, `1.24-bookworm`, …), not a Temurin/JDK hardcode.
 
 **10. Cleared target named, but unlock and footer still say "wait for quarantine".** On `demo2`
 issue #4 (`actions/checkout@v7` → resolved `v7.0.1` in window), remediation and `Moves to` already
