@@ -1,5 +1,11 @@
 # ai-devsecops-agent
 
+> **Archived.** This repository is frozen and no longer maintained.
+>
+> The product lives in [`amsokol/ai-devsecops`](https://github.com/amsokol/ai-devsecops) —
+> runner and knowledge library as one release. New work, tags, and dogfood land there
+> (pin `@v0.6.2` or newer). This tree remains as history for older product pins.
+
 AI DevSecOps agent that reviews proposed changes and maintains a repository's default branch. It is the
 executing half of a two-part system: all judgement lives in the knowledge library
 [`ai-devsecops-skills-knowledge`](https://github.com/amsokol/ai-devsecops-skills-knowledge), and each
